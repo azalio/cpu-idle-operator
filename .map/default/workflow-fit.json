@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "recommended_workflow": "map-plan",
+  "needs_map": true,
+  "decision_summary": "Greenfield Go node-agent: 13 \u0440\u0435\u0448\u0435\u043d\u0438\u0439 \u0443\u0436\u0435 \u0441\u043d\u044f\u0442\u044b \u0434\u0432\u0443\u043c\u044f wayfind-\u043a\u0430\u0440\u0442\u0430\u043c\u0438, \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0434\u0435\u043a\u043e\u043c\u043f\u043e\u0437\u0438\u0446\u0438\u044f \u0440\u0435\u0430\u043b\u0438\u0437\u0430\u0446\u0438\u0438; \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u043e\u0441\u0442\u044c \u043e\u043f\u0438\u0440\u0430\u0435\u0442\u0441\u044f \u043d\u0430 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u043d\u043e\u0435 \u043f\u043e\u0432\u0435\u0434\u0435\u043d\u0438\u0435 \u044f\u0434\u0440\u0430 6.17 \u0438 kubelet 1.36.3",
+  "signals": {
+    "expected_diff_size": "large",
+    "has_new_invariants": true,
+    "needs_independent_review": true,
+    "has_clear_acceptance_criteria": true,
+    "test_first_required": true,
+    "depends_on_runtime_state": true
+  },
+  "updated_at": "2026-08-16T18:53:53.062261Z"
+}

@@ -1,0 +1,356 @@
+{
+  "schema_version": "1.0",
+  "branch": "default",
+  "updated_at": "2026-08-17T11:05:21.174028Z",
+  "event_count": 1595,
+  "aggregate": {
+    "input": 30332,
+    "output": 1884832,
+    "cache_creation": 10089451,
+    "cache_read": 276301870,
+    "cache_hit_ratio": 0.9999,
+    "est_cost_usd": 737.1098
+  },
+  "by_subtask": {
+    "unattributed": {
+      "input": 844,
+      "output": 209788,
+      "cache_creation": 1330541,
+      "cache_read": 18079382,
+      "est_cost_usd": 59.47592
+    },
+    "ST-014": {
+      "input": 133,
+      "output": 90596,
+      "cache_creation": 595535,
+      "cache_read": 15070122,
+      "est_cost_usd": 40.568158
+    },
+    "ST-001": {
+      "input": 110,
+      "output": 46215,
+      "cache_creation": 230025,
+      "cache_read": 4901999,
+      "est_cost_usd": 15.133743
+    },
+    "ST-002": {
+      "input": 282,
+      "output": 143966,
+      "cache_creation": 533665,
+      "cache_read": 15317704,
+      "est_cost_usd": 43.784458
+    },
+    "ST-003": {
+      "input": 14777,
+      "output": 63026,
+      "cache_creation": 244164,
+      "cache_read": 4077395,
+      "est_cost_usd": 15.642772
+    },
+    "ST-004": {
+      "input": 4382,
+      "output": 89770,
+      "cache_creation": 440416,
+      "cache_read": 8844852,
+      "est_cost_usd": 28.323558
+    },
+    "ST-005": {
+      "input": 2574,
+      "output": 146202,
+      "cache_creation": 623575,
+      "cache_read": 9986249,
+      "est_cost_usd": 37.675166
+    },
+    "ST-006": {
+      "input": 305,
+      "output": 154654,
+      "cache_creation": 1349564,
+      "cache_read": 40650645,
+      "est_cost_usd": 97.883916
+    },
+    "ST-007": {
+      "input": 144,
+      "output": 128228,
+      "cache_creation": 772791,
+      "cache_read": 11909258,
+      "est_cost_usd": 41.972978
+    },
+    "ST-008": {
+      "input": 128,
+      "output": 75866,
+      "cache_creation": 366120,
+      "cache_read": 6006334,
+      "est_cost_usd": 21.566117
+    },
+    "ST-009": {
+      "input": 2092,
+      "output": 138328,
+      "cache_creation": 491141,
+      "cache_read": 12882130,
+      "est_cost_usd": 38.938066
+    },
+    "ST-010": {
+      "input": 156,
+      "output": 131979,
+      "cache_creation": 345182,
+      "cache_read": 9939806,
+      "est_cost_usd": 31.282632
+    },
+    "ST-011": {
+      "input": 166,
+      "output": 62545,
+      "cache_creation": 303252,
+      "cache_read": 5966353,
+      "est_cost_usd": 19.328869
+    },
+    "ST-012": {
+      "input": 130,
+      "output": 61676,
+      "cache_creation": 200711,
+      "cache_read": 6057472,
+      "est_cost_usd": 17.477191
+    },
+    "ST-013": {
+      "input": 146,
+      "output": 115566,
+      "cache_creation": 277088,
+      "cache_read": 15622877,
+      "est_cost_usd": 37.299352
+    },
+    "ST-015": {
+      "input": 3963,
+      "output": 226427,
+      "cache_creation": 1985681,
+      "cache_read": 90989292,
+      "est_cost_usd": 190.756931
+    }
+  },
+  "by_agent": {
+    "orchestrator": {
+      "input": 620,
+      "output": 321271,
+      "cache_creation": 3510403,
+      "cache_read": 132646392,
+      "est_cost_usd": 288.894266
+    },
+    "research-agent": {
+      "input": 651,
+      "output": 29722,
+      "cache_creation": 164912,
+      "cache_read": 2401386,
+      "est_cost_usd": 0.595539
+    },
+    "monitor": {
+      "input": 10363,
+      "output": 325416,
+      "cache_creation": 1980157,
+      "cache_read": 35654585,
+      "est_cost_usd": 115.171461
+    },
+    "task-decomposer": {
+      "input": 10,
+      "output": 51931,
+      "cache_creation": 214847,
+      "cache_read": 265710,
+      "est_cost_usd": 8.321923
+    },
+    "actor": {
+      "input": 18632,
+      "output": 1131051,
+      "cache_creation": 4041282,
+      "cache_read": 101921060,
+      "est_cost_usd": 313.763929
+    },
+    "final-verifier": {
+      "input": 56,
+      "output": 25441,
+      "cache_creation": 177850,
+      "cache_read": 3412737,
+      "est_cost_usd": 10.362709
+    }
+  },
+  "by_phase": {
+    "unknown": {
+      "input": 844,
+      "output": 209788,
+      "cache_creation": 1330541,
+      "cache_read": 18079382,
+      "est_cost_usd": 59.47592
+    },
+    "MONITOR": {
+      "input": 58,
+      "output": 45588,
+      "cache_creation": 260563,
+      "cache_read": 2390370,
+      "est_cost_usd": 11.891082
+    },
+    "COMPLETE": {
+      "input": 131,
+      "output": 70449,
+      "cache_creation": 512822,
+      "cache_read": 16092489,
+      "est_cost_usd": 39.039785
+    },
+    "ACTOR": {
+      "input": 29299,
+      "output": 1559007,
+      "cache_creation": 7985525,
+      "cache_read": 239739629,
+      "est_cost_usd": 626.70304
+    }
+  },
+  "research_roi": {
+    "schema_version": "1.0",
+    "research_tokens": 2596671,
+    "research_est_cost_usd": 0.595539,
+    "actor_monitor_tokens": 252489326,
+    "actor_monitor_est_cost_usd": 642.566047,
+    "research_token_share": 0.009,
+    "by_subtask": {
+      "ST-001": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 5178349,
+        "actor_monitor_est_cost_usd": 15.133743,
+        "actor_monitor_event_count": 55,
+        "research_token_share": 0.0
+      },
+      "ST-002": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 15995617,
+        "actor_monitor_est_cost_usd": 43.784458,
+        "actor_monitor_event_count": 141,
+        "research_token_share": 0.0
+      },
+      "ST-003": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 4399362,
+        "actor_monitor_est_cost_usd": 15.642772,
+        "actor_monitor_event_count": 41,
+        "research_token_share": 0.0
+      },
+      "ST-004": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 9379420,
+        "actor_monitor_est_cost_usd": 28.323558,
+        "actor_monitor_event_count": 98,
+        "research_token_share": 0.0
+      },
+      "ST-005": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 10758600,
+        "actor_monitor_est_cost_usd": 37.675166,
+        "actor_monitor_event_count": 100,
+        "research_token_share": 0.0
+      },
+      "ST-006": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 42155168,
+        "actor_monitor_est_cost_usd": 97.883916,
+        "actor_monitor_event_count": 159,
+        "research_token_share": 0.0
+      },
+      "ST-007": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 12810421,
+        "actor_monitor_est_cost_usd": 41.972978,
+        "actor_monitor_event_count": 72,
+        "research_token_share": 0.0
+      },
+      "ST-008": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 6448448,
+        "actor_monitor_est_cost_usd": 21.566117,
+        "actor_monitor_event_count": 64,
+        "research_token_share": 0.0
+      },
+      "ST-009": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 13513691,
+        "actor_monitor_est_cost_usd": 38.938066,
+        "actor_monitor_event_count": 107,
+        "research_token_share": 0.0
+      },
+      "ST-010": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 10417123,
+        "actor_monitor_est_cost_usd": 31.282632,
+        "actor_monitor_event_count": 78,
+        "research_token_share": 0.0
+      },
+      "ST-011": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 6332316,
+        "actor_monitor_est_cost_usd": 19.328869,
+        "actor_monitor_event_count": 49,
+        "research_token_share": 0.0
+      },
+      "ST-012": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 6319989,
+        "actor_monitor_est_cost_usd": 17.477191,
+        "actor_monitor_event_count": 65,
+        "research_token_share": 0.0
+      },
+      "ST-013": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 16015677,
+        "actor_monitor_est_cost_usd": 37.299352,
+        "actor_monitor_event_count": 73,
+        "research_token_share": 0.0
+      },
+      "ST-014": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 2696579,
+        "actor_monitor_est_cost_usd": 11.891082,
+        "actor_monitor_event_count": 29,
+        "research_token_share": 0.0
+      },
+      "ST-015": {
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "research_event_count": 0,
+        "actor_monitor_tokens": 89589279,
+        "actor_monitor_est_cost_usd": 180.394222,
+        "actor_monitor_event_count": 236,
+        "research_token_share": 0.0
+      },
+      "unattributed": {
+        "research_tokens": 2596671,
+        "research_est_cost_usd": 0.595539,
+        "research_event_count": 55,
+        "actor_monitor_tokens": 479287,
+        "actor_monitor_est_cost_usd": 3.971925,
+        "actor_monitor_event_count": 5,
+        "research_token_share": 0.8442
+      }
+    }
+  }
+}

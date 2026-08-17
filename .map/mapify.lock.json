@@ -1,0 +1,945 @@
+{
+  "mapify_version": "3.27.0",
+  "provider": "claude",
+  "installed_at": "2026-08-16T18:03:34Z",
+  "entries": [
+    {
+      "dest": ".claude/agents/actor.md",
+      "content_hash": "152e08a47f97ddf6d82d9a1b79f1d539256366551aa644ac1f2268565ae1f14e",
+      "template_hash": "4da92d8b1fa537acbbe1769d9d867bb2bf19715a2f674262b8d5227b61c16af2",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/documentation-reviewer.md",
+      "content_hash": "b8c2cbe5075e9fe17ff6f2c5d2213883c8d3e8c00a771ffcf8646df678a90e9d",
+      "template_hash": "458e7011a8c7256758d879511fdcf80da304b5ae3802ab7b998facfbc500dfa4",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/evaluator.md",
+      "content_hash": "d899b5665341e04f456af0b0e48dce7beb19fffc6c388325f5fe929b05435727",
+      "template_hash": "e4fa165f6f949673fe079d310dc9db86e147e7eca8373a6d3a40382ae9889f1e",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/final-verifier.md",
+      "content_hash": "6b75c971c22def9af921fae8c1a5e13a3114e19134b2c528acca30b8a9421116",
+      "template_hash": "9c45122c881e6893af7d913c385597e4ba39a2772603bd5611bd83e6a56fa94b",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/monitor.md",
+      "content_hash": "570406f7010210da7f8d5722548b8b6d23b3c67c3e58a6b15b6e7d8b9a4026bd",
+      "template_hash": "94a16ff6118c51d4bba84030971c1985a588cb16996efe7ef8acc9481d9c5dc3",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/predictor.md",
+      "content_hash": "15ebc28bc2dc9652e8bb82eebd13f3e0e1ed5f939bd0f331a457c6f77b49e28b",
+      "template_hash": "93e44af611403de9471601049d26db1c2ac3a54c00482246d93bc103a3817897",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/reflector.md",
+      "content_hash": "007108c169dcf06271624d6b2dc3fb8259a5f0649d1febfae5c035e8cd2192cc",
+      "template_hash": "50252cb3b1595ed39b0361c0ad878c12205122f69f09600ccb0e9a3e69363834",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/research-agent.md",
+      "content_hash": "ec1f7657ce32e81f4679210372fe7f069d63593c35d54b43c668ae1d04f26992",
+      "template_hash": "607095dea9d93287c49994f1a94d8355afc6ff6ff7ecf1d0cd7fceb1012fc9ad",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/agents/task-decomposer.md",
+      "content_hash": "aecbcc26ab8cf29ea5dabdf9d565fa666a71cbe2fd93748f5db245626650e97a",
+      "template_hash": "f773cea9e6318d0967cce29d6317af60845667dcf46dc30e24774ee3c75947db",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/README.md",
+      "content_hash": "cc68ac1c366346649c165785466205ea68b4c6d9acae6de18c43ccad21395015",
+      "template_hash": "243a8f46fb8eb33ec91f80d4902ddd4d47c5ddbbb17e925a7ef58243a8d2809f",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/context-meter.py",
+      "content_hash": "514e2b4314ac55ee1b567928ce6dec082b041fc96efe400087ec52131ca1cc9e",
+      "template_hash": "cc7282cbaaf0402e0909aa02f90d209a115023a760dd1ac75d984f01cd858358",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/detect-clarification-triggers.py",
+      "content_hash": "d46d14367af25a01a89d5f8c84d4c42a636d5112db726f3630af837a8e6b204d",
+      "template_hash": "fd9c5cbbb53a6b47dc1f290405876e9205591a6a4a7d738027c67f14d4ed52cb",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/end-of-turn.sh",
+      "content_hash": "db3091e7d36919da17aeeb23fff4a11b30fd6aaa2dffb40008303c0324367223",
+      "template_hash": "2506acc8613798f0462dd853bd23d6e56f527e13dc2802887086172dbba6ffd0",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-memory-capture.py",
+      "content_hash": "da665c03169376727da089b223483231931eabefd2943db434cca20c7d890dbf",
+      "template_hash": "4910b91a3198c7e35f23f7d0e5e3f26cbff89670934db8d1323b4eac88af402e",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-memory-endmark.py",
+      "content_hash": "b83a1bcc5c7f0889be3338885061e9c775b7d2745a59e3d08a215f36186c2634",
+      "template_hash": "7bd6fc164ea79d5916f3180fdcaebcb5f8743c276a55193134c5a08038e2be25",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-memory-finalize.py",
+      "content_hash": "7f3aef9471d9c44e011dd590ff9da0c35abcbc60ed68aecc4124ae40911cee62",
+      "template_hash": "02f4b12504e41820346fab885f6bf18b3ce527867ec0f51bc3d0335c4ecf3abe",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-memory-recall.py",
+      "content_hash": "1125f002b618f8280c8777b772b87898e50e978bdf3925b570e669cb8d507e86",
+      "template_hash": "31243e29411dc8d19e5c1580b42c42061c88036feb0f40b725f79ccc56b9339a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-statusline.py",
+      "content_hash": "30a48440e56dab698f1baf8b0e757465e4948321304d8d43ad566f9fa00a442e",
+      "template_hash": "327da42515da672875d5d838d6fa70540af95ecc5e0d0baca08d3277fcc8c27a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/map-token-meter.py",
+      "content_hash": "572bc42897fa2c66cf8c1700a2187b3b9334f0787604b5ed4f145f2df6206a57",
+      "template_hash": "93a341f31c49c476c84af20afd9621e2781cc7c118be7171829ca6c7f305143c",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/post-compact-context.py",
+      "content_hash": "f28bc522a2caf4a17db11c8a6bf6c33da51f71f552bc68b32a161d5fc7505ede",
+      "template_hash": "5c9307062a1f55cad418c66d609ebcb85e4bfe78106c26f1e677103d4f0fd74a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/pre-compact-save-transcript.py",
+      "content_hash": "d784df1063165bcfc2a453a84a3b9e8108996724b365a2922a8f9e1576d5cef5",
+      "template_hash": "1e0e6d75ede5a65896f3db98966dade562ed3ac5e6b5a009a9f0b7be751de93a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/ralph-context-pruner.py",
+      "content_hash": "671b44680aa625cae4cf382895a40514c530de6c2560c4f155e0fe3cf75bc262",
+      "template_hash": "849000ef906e51f7742038386a53b43beadc3c075a18744ba82e0b61601c6e6c",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/ralph-iteration-logger.py",
+      "content_hash": "01ca04f1e3cb262af36f1203018217eca88c9dfdcaaa4373a744162c70b2a515",
+      "template_hash": "260b7d33a342426776ffa2d8865b0a0c6a2ed1e86665886c26a399b3ba0076e8",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/safety-guardrails.py",
+      "content_hash": "44554ac61a45c277e701c8b0e883f4fe6eab8b7b13291d9c5515c74ff85d12fa",
+      "template_hash": "5b2bbd2f6e02efd1bfeaaac467799715fe99276931353a2c9d812516190f2c00",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/scrub-internal-ids.py",
+      "content_hash": "1054b409c3cf5389685eb5d7d1b1a343665eb5070f46c48e19b2fd328ef447db",
+      "template_hash": "5edffb75f79400bf5c9a78ba287560fe94cfeb5814687623be72e5b4492fa8a5",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/workflow-context-injector.py",
+      "content_hash": "e9f64975eab1c40b77810cf1f84e1d8e7042bdddd97a70934d3037cb0604f5ce",
+      "template_hash": "f5b31473578d3af19916bf43406963ae6e5ee6d42e305de16ebdcdcb6a9b1dd3",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/hooks/workflow-gate.py",
+      "content_hash": "3849016bd1d4b17e4ed89613cb2874ae96e72f35fd47aa623331ae2c16cb3bdd",
+      "template_hash": "f42a1a55fe8792242fe172959b1524475a73d4a0f5e0a87cad4e688add06b1cb",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/ralph-loop-config.json",
+      "content_hash": "dbef92c78ba81141939d90b225b922d79837b05811621a754ea15b2d84729961",
+      "template_hash": "1196d1777fe4c87c448c9b8ee5a8ccb848ca81cc6ad117d199c3fb50c6ea5f73",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/bash-guidelines.md",
+      "content_hash": "39311b9d6d62971c361868a0094e42410a1fddbd7f547dceefaf065727ccfed7",
+      "template_hash": "39311b9d6d62971c361868a0094e42410a1fddbd7f547dceefaf065727ccfed7",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/decomposition-examples.md",
+      "content_hash": "22b507b7bf9aa461c6e33257636fe2c26ca0ef114c712153c81a971429a3c068",
+      "template_hash": "22b507b7bf9aa461c6e33257636fe2c26ca0ef114c712153c81a971429a3c068",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/escalation-matrix.md",
+      "content_hash": "668dcc566195722d6c28a8313fc5961dcff578d88c648f406e1e279dd1f0c623",
+      "template_hash": "668dcc566195722d6c28a8313fc5961dcff578d88c648f406e1e279dd1f0c623",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/hook-patterns.md",
+      "content_hash": "1a8ba450d4c5060142296dc7bace059eeaeddb3ac098398a2aa6a5874c2e9374",
+      "template_hash": "1a8ba450d4c5060142296dc7bace059eeaeddb3ac098398a2aa6a5874c2e9374",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/host-paths.md",
+      "content_hash": "4bd11541edbd6dcec12d710c91f3608069c1c9b7c6bf1d2a0aa21b400d92fa93",
+      "template_hash": "4bd11541edbd6dcec12d710c91f3608069c1c9b7c6bf1d2a0aa21b400d92fa93",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/map-json-output-contracts.md",
+      "content_hash": "aab96356ffce2d4fec5398bf181fd8609206eee19aedcb01c993ac3a2c58b052",
+      "template_hash": "aab96356ffce2d4fec5398bf181fd8609206eee19aedcb01c993ac3a2c58b052",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/map-output-examples.md",
+      "content_hash": "49ed817fad0b7c2a5df8c2229fb1271e5f8e436af5445282ef48f767548d3afe",
+      "template_hash": "49ed817fad0b7c2a5df8c2229fb1271e5f8e436af5445282ef48f767548d3afe",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/map-xml-prompt-envelopes.md",
+      "content_hash": "bfc01f3a2d9b36cd3b1df0025a1c7fc528b74f77ed52368a95b8ec2c24ff59af",
+      "template_hash": "bfc01f3a2d9b36cd3b1df0025a1c7fc528b74f77ed52368a95b8ec2c24ff59af",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/mcp-usage-examples.md",
+      "content_hash": "07fb06dda46118ea9da03b395975a02699bb7ae655b1929bc546641a5757c553",
+      "template_hash": "07fb06dda46118ea9da03b395975a02699bb7ae655b1929bc546641a5757c553",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/step-state-schema.md",
+      "content_hash": "ab5f7cea880bd3ff3fd4a4b29049a8f225d777144c6c9432c811bf350dfc0440",
+      "template_hash": "ab5f7cea880bd3ff3fd4a4b29049a8f225d777144c6c9432c811bf350dfc0440",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/references/workflow-state-schema.md",
+      "content_hash": "f81549b456dc5954342571480569aac889b59830fb90d13c9279fa2514524595",
+      "template_hash": "f81549b456dc5954342571480569aac889b59830fb90d13c9279fa2514524595",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/rules/learned/README.md",
+      "content_hash": "41508249946644bd33a0e85f55b77cd4bbc35bcd8929da89d8bddfa8704014cf",
+      "template_hash": "818cd6b94672b7c9322eddad53d3cdaae9deeb719517a8736790f2c92629042d",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/settings.json",
+      "content_hash": "d18f9d10a67face78a6a8227fdcf9204e303713634b3997f18bc19c52b5ad635",
+      "template_hash": "d18f9d10a67face78a6a8227fdcf9204e303713634b3997f18bc19c52b5ad635",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/README.md",
+      "content_hash": "87f20830208b3a0141cb9590a54bab0eba7defae347a7320a4262486f46e6f2e",
+      "template_hash": "f64c27dc66bc06aea07a81d9087f42e5c0801e240880c869fa9575046cec5d58",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-architecture/SKILL.md",
+      "content_hash": "d6fbee587f90c72175cd36db79936b7f00d60018e76f3d010e6114d540c61155",
+      "template_hash": "a3d80f3e2a690ce55d59118561390c3c6543f34e0e60117476e71892a6ac16ee",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-auto/SKILL.md",
+      "content_hash": "2159c5148f1159c9aa0e1fb1da8c5d78c41363d3c808e0603e605aee8ec04d48",
+      "template_hash": "3795e187aeadd1d35b43bd689f41465214aad30019a68aee960d3c3a27941ece",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-auto/auto-reference.md",
+      "content_hash": "c7ae9365e5e1b267762707d46bf066ae93cf61d1cfe2f1eb80ecf50d2b458412",
+      "template_hash": "0caeabe2f0fff86e2dc0b2e85f08ee7fd7d69823a51840d0dcfc095bb7be3040",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-check/SKILL.md",
+      "content_hash": "4fb40b45bf914ceb4fc99d73dc451ae19a7bec6d8fc9d136c79e4df6052101e4",
+      "template_hash": "5402a502e01167d581111c6c62f261f76309192396cd12451b966c55a9cd9912",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-check/check-reference.md",
+      "content_hash": "73877bcefe8cfadd92099f0f4dfb12844de35e572bfff29adfc7ba4bdd84a44f",
+      "template_hash": "f4ac392e27a6cc723c58f1e28b522db9e0c52eddc8c616dda47fbf9ce007954e",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-debug/SKILL.md",
+      "content_hash": "5922f716884fd3718ba44fa13475fb61109b58d2ab18f7b80bc59dfecaf6be05",
+      "template_hash": "f4c70e0e78aa0fd74a0c8d2743d9c294c3a65d4f89d2ca8d6e1ae769b7808a93",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-efficient/SKILL.md",
+      "content_hash": "0c88586d5863e0b90a8d4c536593db6cd4ffa462ff45493fbce629af423da694",
+      "template_hash": "af09b9130e98ddec1c957971628fda5e96c950b309f8dc24f7d202261385ecc5",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-efficient/efficient-reference.md",
+      "content_hash": "64a57b991db759f862561c5d090a931c681a15d738226074526a6465c95afdec",
+      "template_hash": "d5735f5d17e4074a3cbdabe51a120a294f49c5218f37ce0e4c763d37ecbe645d",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-explain/SKILL.md",
+      "content_hash": "b5f58f59dc91fd730e6e8e1b7fb62a9c907a8817342d8c0b6f3fc047a4b41082",
+      "template_hash": "6cb81da86833367e252875aa349256cd82770800e2fc0fd9877be405987f5f5c",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-fast/SKILL.md",
+      "content_hash": "d725520a8b1821038c4ad5c72fd1c45333420dc15ccd2adc1be8be5779840808",
+      "template_hash": "eb898392b756670ce3fe211fa752f286c5e60d690dfd3f2b106d79d53707ab9a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-learn/SKILL.md",
+      "content_hash": "35ecf5b769a59155a16a38b7d48572606806b7343e342fa3314ece92ab66cf22",
+      "template_hash": "75b6ac6f7afc44cf690ffd8cf267b766c35188559ebb188c70868820d11ffeda",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-learn/templates/example-rules.md",
+      "content_hash": "2c8017d6e8974a1115ddc31d78ce8ca2a43d02e038b66caa8a02497c548b2ea7",
+      "template_hash": "7cb33a8aaad1f37880b13bc5754fa24bfe4ee7b6bc81cecf0bb48a7a844d693c",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-learn/templates/rules-unconditional.md",
+      "content_hash": "f5fb422881ad31889bc99971833fef484b422ab62db1a38dfb2a2ffabbca7e85",
+      "template_hash": "c76429486416c9540f849eddfef618ed603e0f9bbd576d970b87f4aa56bf9026",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-learn/templates/rules-with-paths.md",
+      "content_hash": "993fef94aa44f746a8238f36b8f3f553bf76f321a446189b092c6948f1a77460",
+      "template_hash": "92bfcb5ed3c365cec9b67be6c39f8c4f3b588915d785a7bf761f6414025860e6",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-memory-now/SKILL.md",
+      "content_hash": "7ece30492973453c9c7d95785ddce1a946d9c906e244276f87bd54ec1bea83af",
+      "template_hash": "b9322189bdeda27531107d1efa8cbc008e8b5d61c431b604aa364f16811955c2",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-plan/SKILL.md",
+      "content_hash": "293a80c8030c71b44ff7b872b1956bdba98c1e7c633f1972599e5490e4d6aa04",
+      "template_hash": "ca6ebf9a50e2dc899cf4deb393f554845a2ae569271acd482aa282cd95135a66",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-plan/plan-reference.md",
+      "content_hash": "8a1a472d4668f79c2aea30396a8eafbbc6221c5e1b880a13136dee5d9b5914c9",
+      "template_hash": "05ebd9db7ee4f46b9fa1863ce650046d0b2577ddc169458f43f746c3b649c68a",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-prd-review/SKILL.md",
+      "content_hash": "d37b17c59974a672ee6d3baf75bc884af23257e9751100a5c9632a751f67c219",
+      "template_hash": "157f6d9e4abd95fa8db2e3eaf123f0776f4a4387a4a4aed2c0ccb1d497d53a7f",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-release/SKILL.md",
+      "content_hash": "9831f4ddc47ce39b8ebde8f048e52eb7fea4a348d55513386c97c20a4a07f68b",
+      "template_hash": "99100834e79c39e97743b40beac7aefef69f326dcbd34e567c40e00bb337b9e2",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-release/release-reference.md",
+      "content_hash": "2644c026148dc2a40196b992486e24d6bf284e13c43ba59703a4b061f918b85a",
+      "template_hash": "fad857bf9f3ac64416b8a2c2260b1c46fc70c1568162ed45a0d05ce129b8c10c",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-resume/SKILL.md",
+      "content_hash": "4e56ec7c0dcba990c72899855bbf78e9339957c50aa020760fdba47762246c18",
+      "template_hash": "c437779fd31c8c578cfebf8b9ff39c2b3c69a65d54564eb7fffa61bdb953399f",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-resume/resume-reference.md",
+      "content_hash": "47dde0362a09ddee29a0a22799b180815f63299c81837d48e86f1f747fa4d30c",
+      "template_hash": "6999cbb3fb1ac8ccd327d6e9e0a41d3a2f959f458a9181e2aa04a0c29035c061",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-review/SKILL.md",
+      "content_hash": "10a0a58e8bc615be0e854c6e5d2f8e673853799df0e6dc323b990907e2a98593",
+      "template_hash": "a85a8521e8dc5e5bde3c84c9730c0ef1b1c5872aaf50c41938b086fb1535fd64",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-review/adversarial-reference.md",
+      "content_hash": "74dff7991ceedad13f02b73e09fd30a24acfd816bd5c551a04c5ec9c428e2b2a",
+      "template_hash": "442e9f200aaafb003df52135dde2606f3fe33898402be19d0a215667e0b0c620",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-review/review-reference.md",
+      "content_hash": "207af7b6211c97148663d148fea94d1b7b603985364fee1be0f9c7983f434681",
+      "template_hash": "66920eede1d5bb0dce9547076238bdb2ea914a5a21c2f536d305c734debab617",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-skill-eval/SKILL.md",
+      "content_hash": "a7f723e56df732a7839d3e306271b7a0dd142f80c7f6f83d57baffb471edc43a",
+      "template_hash": "a5c04763ba49e71ae3eb7a9857502e4aa5764072ddb3207785b2f83d318c7bf0",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-so-search/SKILL.md",
+      "content_hash": "0b4deb643fb729daddd3b249ea78b26a64830e5dd2002a61952433558507a0a4",
+      "template_hash": "2855eadb39b0e490c24f638837f42c01b304390c2aec5c5fd60ec08fb5fcfee1",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-so-search/scripts/sofa_search.py",
+      "content_hash": "b948e5864767b02362580cf94da694ea0c216c5de9b82bca005c6e9c23a4a56f",
+      "template_hash": "ab2868017f0fe8e34af6ed20db33bf3b8b1d3b4f1f3812253248d7b69b9c687d",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/SKILL.md",
+      "content_hash": "64e3f235502a8143380004be9b9e54d1d1f456525a3ff1843f1c8bb8b7b73e5c",
+      "template_hash": "1a364c9be20d484f21f276d6ff68dc0a711935f993ddbdf254d8c561f0976cfc",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/scripts/check-complete.sh",
+      "content_hash": "db059cfaf08717b29e9688db224478f93a5a61b87653fe08c6f7b1786679394f",
+      "template_hash": "cce696c9d3cedd42bfb264205796db9085da3cb0d9860967fe7f66b95a329867",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/scripts/get-plan-path.sh",
+      "content_hash": "94f83d6c86db3160d2ca4fac5a47488bddee2ed11b8c8a31d411a71ea8680fc9",
+      "template_hash": "65b855caa56f25430b51a550609f49b069f072244250f32ff20b1dc85c81932f",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/scripts/init-session.sh",
+      "content_hash": "10586ba27de54f78cc939aa17e1fdd47797325aa0137a0bcd4609d5f5d705efb",
+      "template_hash": "61b7159b52b7233553a0551ee81b138e81b9dcf4a80f0b345bc84c3556190765",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/scripts/show-focus.sh",
+      "content_hash": "d5265be457fdf89516efc42666b23f31ea3364e47a7544a2443b949054580d34",
+      "template_hash": "35b14b3e68382ed646e2ddeb7ef49d904857addbf634e3689fd2f78b946f9578",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/templates/findings.md",
+      "content_hash": "1b9b05284f1097391e0262d468a4f58ee230c432f221bbc221105d847ee2dccb",
+      "template_hash": "63c274fbe2e89a530ecbdca530b69a03aa0df52a5c440834d6c313e1e07d2621",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/templates/iteration_history.md",
+      "content_hash": "652b7393b5fda3fd6144e1d823a337a7b4948b429bb27378f6d30379c2c1b5de",
+      "template_hash": "3a1c35cac7a4de0ca0123948b040b95186314aa5d2fad9f1db9e34b0b6717264",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/templates/progress.md",
+      "content_hash": "3ed150b8de6dc647ec5dc59915d980686e928354da5f8040f7327d7c4f3578d0",
+      "template_hash": "f102d16c8972dc65f73119287038201b6ae77c402f5bd977fd1f87f441ae2f48",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-state/templates/task_plan.md",
+      "content_hash": "4e6e6b2d836f28931d2d338e8bc4b31ebf88851f6c16901e2915103827945eb5",
+      "template_hash": "88cc15b9a660bbeeffc953d3ce972a893f124b0d4e05c6621ccab0172d9c0285",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-task/SKILL.md",
+      "content_hash": "b4e2ec6666a8fc5e269c3f35f5b47d29c20187c61cfd6703c321bd6d72ac65e4",
+      "template_hash": "20de73237658b47c01aab0f88ffdb5b28efa1d675f2614b8fa6ca127094691c3",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-tdd/SKILL.md",
+      "content_hash": "2c7b49d3d47679b7a57fc7ca5a359d305ac0922532f8f76c2c0c80d553897b67",
+      "template_hash": "45e0d58ee24895acd802158602d537e8e94a953d68376fa0d287863ee5fdf542",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-tokenreport/SKILL.md",
+      "content_hash": "a1ec33ab00b678f74eaa82eaea2c129553d0c7aff55786605b1d2512622b29a8",
+      "template_hash": "3e2050d88f6a4674ca007978838b1d9d5ef9f7bb1e52d2ccb938ff2cd97c0c9b",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-understand/SKILL.md",
+      "content_hash": "cadb88169e09bc01df585e295070ebc6a617a24d558cd98da30faa0a22a168b0",
+      "template_hash": "2b85b93a5b38da94deabd765f987ff7698b8587f2773909f806f891766a18f06",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-upgrade/SKILL.md",
+      "content_hash": "c18679f3a8c7bea94ec59cc68132f34f9bb10ba8533bbe38fb77d93f9f1107e6",
+      "template_hash": "3be2277b4a8850d2aced7de78f03e4047770f6f05a275dc1a873c41934b8b8ba",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-wayfind/SKILL.md",
+      "content_hash": "bd260a4cda3d95b327913bdc76273ee53201908e1a75436dd51af315c5ddbecc",
+      "template_hash": "08d37f2afd2e11c84ca97745b194d669e29c459fa52a54cd83f85bdbd13d34c6",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/map-wayfind/wayfind-reference.md",
+      "content_hash": "398d4765d497062c773d801e2e997afff5269da121ad75cfa9627fc9f1cdc2fd",
+      "template_hash": "cad6bb7492682c4cafe8ddb662ff6ab204eec76b24888350eb4ab8d881e7cb8e",
+      "management_mode": "fenced",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/skills/skill-rules.json",
+      "content_hash": "dadc6de4f79ce254133962eeb4216b770f9202776830c8eabf1cccbfafea042f",
+      "template_hash": "ddbe22b0f4836f15efc2a762608e1b1538288c3bc24d5d593800cff4e86aac83",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".claude/workflow-rules.json",
+      "content_hash": "b582bd52fda9fe4cb361fa6620649592e0cefe5a481e70d95897605e5b7d7e59",
+      "template_hash": "b582bd52fda9fe4cb361fa6620649592e0cefe5a481e70d95897605e5b7d7e59",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/classify_scope.py",
+      "content_hash": "c086a40f2813f77753353bb3919b312688e9bc80a75ecbad4e1297c7d57f02a5",
+      "template_hash": "c086a40f2813f77753353bb3919b312688e9bc80a75ecbad4e1297c7d57f02a5",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/diagnostics.py",
+      "content_hash": "981b08c36407b6eae4bc317a57c4b37885250ac9a99dd65ceed21e2a9741ce83",
+      "template_hash": "981b08c36407b6eae4bc317a57c4b37885250ac9a99dd65ceed21e2a9741ce83",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/map_orchestrator.py",
+      "content_hash": "b9498e8a38c34a3428b4602810dc674f22323cca1218a4685765c047d147b7a6",
+      "template_hash": "b9498e8a38c34a3428b4602810dc674f22323cca1218a4685765c047d147b7a6",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/map_step_runner.py",
+      "content_hash": "fc1250bb46d775f92c698f02c91bd71a84ec5f56093a9c0b5293b76616d7a53d",
+      "template_hash": "fc1250bb46d775f92c698f02c91bd71a84ec5f56093a9c0b5293b76616d7a53d",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/map_utils.py",
+      "content_hash": "2eafd050864b4a62d250c9b4c7e9294561f530a7a981bdb706a607b339bd94e5",
+      "template_hash": "2eafd050864b4a62d250c9b4c7e9294561f530a7a981bdb706a607b339bd94e5",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/scrub_internal_ids.py",
+      "content_hash": "92d52343a395d0eb2ca9bebbab6a35bddb212e095808158f4a1af7b907f5a75e",
+      "template_hash": "92d52343a395d0eb2ca9bebbab6a35bddb212e095808158f4a1af7b907f5a75e",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/sofa_client.py",
+      "content_hash": "ac4376e1b278c81391982c4303cefe4558607c11ec053c67b9712a47ec981e1c",
+      "template_hash": "ac4376e1b278c81391982c4303cefe4558607c11ec053c67b9712a47ec981e1c",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/validate_spec_citations.py",
+      "content_hash": "8d54c53ef199fd260a0a94d73405eeefcc6f74d872e0ae2ad531867b6020e293",
+      "template_hash": "8d54c53ef199fd260a0a94d73405eeefcc6f74d872e0ae2ad531867b6020e293",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/scripts/wayfind_runner.py",
+      "content_hash": "8160363cf911fd83f0d8eccc8c535b770d16f9fbc34c5692e4c5320bfb546f7a",
+      "template_hash": "8160363cf911fd83f0d8eccc8c535b770d16f9fbc34c5692e4c5320bfb546f7a",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/analyze.sh",
+      "content_hash": "2fa1727e88ac15e82e42f34e4639976dfdd84f6d8b1eac2696f1fad4bba7b4b0",
+      "template_hash": "2fa1727e88ac15e82e42f34e4639976dfdd84f6d8b1eac2696f1fad4bba7b4b0",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/handlers/common.sh",
+      "content_hash": "009cb6d5f6a97450b80207222a0f7dc56eb844c2742e7da970ff6cb7acea1b09",
+      "template_hash": "009cb6d5f6a97450b80207222a0f7dc56eb844c2742e7da970ff6cb7acea1b09",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/handlers/go.sh",
+      "content_hash": "1aac1799a11668fc54d83e22a1813d7fc59cec03e54d2d2ed6354be0146cd158",
+      "template_hash": "1aac1799a11668fc54d83e22a1813d7fc59cec03e54d2d2ed6354be0146cd158",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/handlers/python.sh",
+      "content_hash": "d9cfac8acf1e70f70f792fa8138eb8ac037f6385af463beceecba3171362092c",
+      "template_hash": "d9cfac8acf1e70f70f792fa8138eb8ac037f6385af463beceecba3171362092c",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/handlers/rust.sh",
+      "content_hash": "70a5367b2c44f06598660fdf4677146b10435cc10e474bfcf64d9167f122357c",
+      "template_hash": "70a5367b2c44f06598660fdf4677146b10435cc10e474bfcf64d9167f122357c",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    },
+    {
+      "dest": ".map/static-analysis/handlers/typescript.sh",
+      "content_hash": "cc3de5c225378031dd1ca4df5f0f1540d7d861ece482d63f66a72179b3f7142b",
+      "template_hash": "cc3de5c225378031dd1ca4df5f0f1540d7d861ece482d63f66a72179b3f7142b",
+      "management_mode": "full",
+      "committed": true,
+      "mapify_version": "3.27.0",
+      "installed_at": "2026-08-16T18:03:34Z"
+    }
+  ],
+  "config_entries": [
+    {
+      "file": ".mcp.json",
+      "key_path": "mcpServers.sequential-thinking",
+      "installed_at": "2026-08-16T18:03:34Z",
+      "mapify_version": "3.27.0"
+    }
+  ],
+  "providers": [
+    "claude"
+  ]
+}

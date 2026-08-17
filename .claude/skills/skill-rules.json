@@ -1,0 +1,526 @@
+{
+  "version": "1.0",
+  "description": "Skill activation triggers for MAP Framework",
+  "skills": {
+    "map-upgrade": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Manually check or upgrade the MAP Framework installed in this project.",
+      "promptTriggers": {
+        "keywords": [
+          "map-upgrade",
+          "upgrade MAP",
+          "update framework",
+          "check MAP version",
+          "upgrade framework"
+        ],
+        "intentPatterns": [
+          "map-upgrade",
+          "(/|\\$)map-upgrade",
+          "(upgrade|update|check).*(MAP|framework)"
+        ]
+      }
+    },
+    "map-state": {
+      "type": "domain",
+      "skillClass": "hybrid",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "description": "File-based planning with branch-scoped task tracking",
+      "runtimeEffects": [
+        "hooks",
+        "branch-scoped .map artifacts"
+      ],
+      "requires-cmd": [
+        "git"
+      ],
+      "promptTriggers": {
+        "keywords": [
+          "create plan",
+          "task plan",
+          "track progress",
+          "planning",
+          ".map directory",
+          "show task status",
+          "resume work"
+        ],
+        "intentPatterns": [
+          "(create|make|start).*(plan|planning)",
+          "(track|show|check).*(progress|status|tasks)",
+          "(resume|continue).*(work|task|plan)",
+          "\\.map.*(directory|folder|files)"
+        ]
+      }
+    },
+    "map-so-search": {
+      "type": "domain",
+      "skillClass": "hybrid",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "description": "Opt-in read-only prior-art search against Stack Overflow for Agents (SOFA), surfaced behind an untrusted-reference boundary",
+      "runtimeEffects": [
+        "network-http-read",
+        "filesystem-sofa-credentials"
+      ],
+      "promptTriggers": {
+        "keywords": [
+          "stack overflow for agents",
+          "sofa search",
+          "search prior art",
+          "prior art",
+          "map-so-search",
+          "validated answers"
+        ],
+        "intentPatterns": [
+          "(search|find|look up).*(prior art|stack overflow|sofa)",
+          "(stack overflow for agents|sofa).*(search|prior art|answer)",
+          "map-so-search"
+        ]
+      }
+    },
+    "map-learn": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Extract and persist workflow lessons to .claude/rules/learned/",
+      "promptTriggers": {
+        "keywords": [
+          "extract lessons",
+          "save patterns",
+          "learn from workflow",
+          "preserve learnings",
+          "map-learn",
+          "project memory",
+          "capture gotchas"
+        ],
+        "intentPatterns": [
+          "(extract|save|preserve|capture).*(lesson|pattern|learning|gotcha)",
+          "(learn|remember).*(workflow|session|implementation)",
+          "map-learn"
+        ]
+      }
+    },
+    "map-check": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Run quality gates (lint, types, tests) and verify MAP workflow completion.",
+      "promptTriggers": {
+        "keywords": [
+          "map-check",
+          "run checks",
+          "quality gates",
+          "verify workflow",
+          "validate completion"
+        ],
+        "intentPatterns": [
+          "map-check",
+          "(run|execute).*(check|gate|lint|test)"
+        ]
+      }
+    },
+    "map-debug": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Structured MAP debugging via task-decomposer, actor, monitor agents.",
+      "promptTriggers": {
+        "keywords": [
+          "map-debug",
+          "debug bug",
+          "diagnose error",
+          "isolate regression",
+          "reproduce bug"
+        ],
+        "intentPatterns": [
+          "map-debug",
+          "(debug|diagnose|isolate).*(bug|error|regression)"
+        ]
+      }
+    },
+    "map-explain": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Deep code/PR explanation that builds a complete mental model — problem, entities, execution and data flow, line-by-line rationale, side effects, assumptions, breakage modes; for PRs also before/after behavior.",
+      "promptTriggers": {
+        "keywords": [
+          "map-explain",
+          "explain this code",
+          "explain this pr",
+          "explain this diff",
+          "mental model",
+          "walk me through",
+          "line by line"
+        ],
+        "intentPatterns": [
+          "map-explain",
+          "explain.*(code|file|function|class|module|pr|diff|commit)",
+          "(walk|teach) me through",
+          "build.*mental model",
+          "line.by.line"
+        ]
+      }
+    },
+    "map-understand": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Interactive deep-understanding and quiz mode that keeps a transient checklist, teaches incrementally, and checks user comprehension without changing normal MAP workflow verbosity.",
+      "promptTriggers": {
+        "keywords": [
+          "map-understand",
+          "understanding check",
+          "quiz me",
+          "teach me this",
+          "verify my understanding",
+          "deep understanding"
+        ],
+        "intentPatterns": [
+          "map-understand",
+          "(quiz|test|check|verify).*(understanding|comprehension)",
+          "teach.*(me|this).*(step.by.step|interactively)",
+          "deep.*understanding"
+        ]
+      }
+    },
+    "map-efficient": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Token-efficient MAP workflow with state-machine orchestration.",
+      "promptTriggers": {
+        "keywords": [
+          "map-efficient",
+          "efficient workflow",
+          "state machine",
+          "full workflow",
+          "run map"
+        ],
+        "intentPatterns": [
+          "map-efficient",
+          "(run|execute).*(efficient|map workflow)"
+        ]
+      }
+    },
+    "map-fast": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Minimal MAP workflow for small low-risk changes (no Predictor/Reflector).",
+      "promptTriggers": {
+        "keywords": [
+          "map-fast",
+          "fast workflow",
+          "small change",
+          "quick task",
+          "low risk"
+        ],
+        "intentPatterns": [
+          "map-fast",
+          "(small|quick|fast).*(change|task)"
+        ]
+      }
+    },
+    "map-plan": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "ARCHITECT phase: decompose a complex task into atomic subtasks.",
+      "promptTriggers": {
+        "keywords": [
+          "map-plan",
+          "decompose task",
+          "task plan",
+          "subtasks",
+          "architect phase"
+        ],
+        "intentPatterns": [
+          "map-plan",
+          "(decompose|plan|break down).*(task|feature|work)"
+        ]
+      }
+    },
+    "map-wayfind": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Decision-frontier wayfinding: resolve open design decisions on a durable map before /map-plan.",
+      "promptTriggers": {
+        "keywords": [
+          "map-wayfind",
+          "wayfind",
+          "decision frontier",
+          "resolve decisions first",
+          "too foggy to plan",
+          "chart the decisions"
+        ],
+        "intentPatterns": [
+          "map-wayfind",
+          "(chart|map|resolve).*(decision|frontier)",
+          "too (foggy|vague|big) to (plan|decompose)"
+        ]
+      }
+    },
+    "map-release": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Execute mapify-cli package release workflow with validation gates.",
+      "promptTriggers": {
+        "keywords": [
+          "map-release",
+          "release workflow",
+          "publish package",
+          "ship release",
+          "pypi release"
+        ],
+        "intentPatterns": [
+          "map-release",
+          "(ship|publish|release).*(package|version|pypi)"
+        ]
+      }
+    },
+    "map-resume": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Resume an interrupted MAP workflow from step_state.json checkpoint.",
+      "promptTriggers": {
+        "keywords": [
+          "map-resume",
+          "resume workflow",
+          "continue map",
+          "checkpoint recovery",
+          "restart workflow"
+        ],
+        "intentPatterns": [
+          "map-resume",
+          "(resume|continue|restart).*(workflow|map|checkpoint)"
+        ]
+      }
+    },
+    "map-review": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Interactive code review using Monitor, Predictor, Evaluator agents.",
+      "promptTriggers": {
+        "keywords": [
+          "map-review",
+          "code review",
+          "review changes",
+          "review diff",
+          "pre-merge review"
+        ],
+        "intentPatterns": [
+          "map-review",
+          "(review|audit).*(code|change|diff|pr)"
+        ]
+      }
+    },
+    "map-skill-eval": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Evaluate a /map-* skill's trigger accuracy + cost, OR optimize its description via anti-overfit held-out selection, via mapify skill-eval (claude -p matrix, deterministic assertions, durable resumable runs).",
+      "requires-cmd": [
+        "claude"
+      ],
+      "promptTriggers": {
+        "keywords": [
+          "map-skill-eval",
+          "skill-eval",
+          "skill eval",
+          "evaluate skill",
+          "trigger accuracy",
+          "skill triggering",
+          "optimize skill",
+          "skill optimize",
+          "description optimizer",
+          "optimize description"
+        ],
+        "intentPatterns": [
+          "map-skill-eval",
+          "(eval|evaluate|measure|test).*(skill).*(trigger|fire|cost)",
+          "does .* skill trigger",
+          "(optimize|improve).*(skill).*(description|trigger)"
+        ]
+      }
+    },
+    "map-task": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Execute a single subtask from an existing MAP plan.",
+      "promptTriggers": {
+        "keywords": [
+          "map-task",
+          "single subtask",
+          "run subtask",
+          "execute subtask",
+          "one task"
+        ],
+        "intentPatterns": [
+          "map-task",
+          "(run|execute).*(subtask|single task)"
+        ]
+      }
+    },
+    "map-tdd": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "TDD MAP workflow: spec-driven tests written before implementation.",
+      "promptTriggers": {
+        "keywords": [
+          "map-tdd",
+          "tdd workflow",
+          "test first",
+          "spec driven tests",
+          "test driven"
+        ],
+        "intentPatterns": [
+          "map-tdd",
+          "(test.first|tdd|spec.driven).*(workflow|develop)"
+        ]
+      }
+    },
+    "map-tokenreport": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Render per-subtask/agent token accounting (tokens, cache, cost, cache-hit ratio) for the current branch.",
+      "promptTriggers": {
+        "keywords": [
+          "map-tokenreport",
+          "token report",
+          "token usage",
+          "token accounting",
+          "run cost",
+          "cache hit ratio"
+        ],
+        "intentPatterns": [
+          "map-tokenreport",
+          "(token|run).*(report|usage|accounting|cost|spent)",
+          "cache.hit.ratio"
+        ]
+      }
+    },
+    "map-memory-now": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "On-demand finalize of session memory (current scratch + --finalize-all sweep)",
+      "requires-cmd": [
+        "claude",
+        "git"
+      ],
+      "promptTriggers": {
+        "keywords": [
+          "finalize memory",
+          "map-memory-now",
+          "save session memory",
+          "--finalize-all"
+        ],
+        "intentPatterns": [
+          "map-memory-now",
+          "(finalize|save).*(memory|session)",
+          "memory.*now"
+        ]
+      }
+    },
+    "map-architecture": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "Opt-in proactive architecture-deepening report: rank codebase hotspots by design friction, generate a candidate report, and pick one to deepen before any implementation.",
+      "promptTriggers": {
+        "keywords": [
+          "map-architecture",
+          "architecture report",
+          "architecture deepening",
+          "hotspot analysis",
+          "codebase health",
+          "design friction",
+          "shallow module"
+        ],
+        "intentPatterns": [
+          "map-architecture",
+          "(architecture|codebase).*(report|health|friction|deepening)",
+          "(find|identify|rank).*(hotspot|shallow|friction)"
+        ]
+      }
+    },
+    "map-prd-review": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "medium",
+      "description": "PRD/requirements-quality review before /map-plan: reviews a product brief across 11 dimensions and returns ready_for_plan, needs_prd_revision, needs_user_decision, or route_to_wayfind.",
+      "promptTriggers": {
+        "keywords": [
+          "map-prd-review",
+          "prd review",
+          "requirements review",
+          "review requirements",
+          "review prd",
+          "product brief review",
+          "requirements quality",
+          "before map-plan"
+        ],
+        "intentPatterns": [
+          "map-prd-review",
+          "(review|audit).*(prd|requirements|product brief|feature brief)",
+          "(prd|requirements).*(review|quality|ready)",
+          "before.*(map-plan|planning)"
+        ]
+      }
+    },
+    "map-auto": {
+      "type": "manual",
+      "skillClass": "task",
+      "enforcement": "manual",
+      "priority": "high",
+      "description": "Single-entry autonomous autopilot: routes a task via route_task then drives the selected MAP workflow chain end-to-end to a committed feature branch.",
+      "promptTriggers": {
+        "keywords": [
+          "map-auto",
+          "autopilot",
+          "single-entry workflow",
+          "auto route task"
+        ],
+        "intentPatterns": [
+          "map-auto",
+          "(autopilot|auto).*(task|workflow|route)"
+        ]
+      }
+    }
+  },
+  "_map_managed": {
+    "generated_by": "mapify-cli",
+    "mapify_version": "3.27.0",
+    "template_hash": "ddbe22b0f4836f15efc2a762608e1b1538288c3bc24d5d593800cff4e86aac83",
+    "installed_at": "2026-08-16T18:03:34Z"
+  }
+}

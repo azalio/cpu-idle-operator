@@ -1,0 +1,12 @@
+{
+  "generated_at": "2026-08-17T11:08:37.179888+00:00",
+  "entry_count": 3,
+  "total_entries_seen": 3,
+  "dropped_count": 0,
+  "file_stats": [],
+  "aggregate": {
+    "total_iterations": 3,
+    "avg_effectiveness": 0.0,
+    "total_thrashing_alerts": 0
+  }
+}

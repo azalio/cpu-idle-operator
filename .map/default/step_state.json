@@ -1,0 +1,251 @@
+{
+  "workflow": "map-efficient",
+  "started_at": "2026-08-16T19:18:49.195682+00:00",
+  "current_subtask_id": "ST-015",
+  "subtask_index": 13,
+  "subtask_sequence": [
+    "ST-001",
+    "ST-002",
+    "ST-003",
+    "ST-004",
+    "ST-005",
+    "ST-006",
+    "ST-007",
+    "ST-008",
+    "ST-009",
+    "ST-010",
+    "ST-011",
+    "ST-012",
+    "ST-013",
+    "ST-015"
+  ],
+  "current_step_id": "2.3",
+  "current_step_phase": "ACTOR",
+  "completed_steps": [
+    "2.2",
+    "2.3",
+    "2.4"
+  ],
+  "pending_steps": [
+    "2.3",
+    "2.4"
+  ],
+  "retry_count": 0,
+  "max_retries": 5,
+  "plan_approved": true,
+  "execution_mode": "batch",
+  "tdd_mode": false,
+  "skipped_steps": [],
+  "execution_waves": [],
+  "current_wave_index": 0,
+  "subtask_phases": {
+    "ST-001": "COMPLETE"
+  },
+  "subtask_retry_counts": {},
+  "workflow_status": "IN_PROGRESS",
+  "subtask_files_changed": {},
+  "guard_rework_counts": {},
+  "constraints": null,
+  "subtask_results": {
+    "ST-001": {
+      "subtask_id": "ST-001",
+      "files_changed": [],
+      "status": "no-op",
+      "summary": "Marked noop via mark_subtask_complete: \u0420\u0430\u0431\u043e\u0442\u0430 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0430 \u0438 \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u0430 \u0447\u0435\u0440\u0435\u0437 record_subtask_result; Monitor valid=true recommendation=approve. \u041a\u0443\u0440\u0441\u043e\u0440 \u0434\u0432\u0438\u0433\u0430\u044e \u0432\u0440\u0443\u0447\u043d\u0443\u044e: \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c \u043e\u0442 \u043e\u0434\u0438\u043d\u043e\u0447\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0433\u043e\u043d\u0430 ST-014 \u0447\u0435\u0440\u0435\u0437 resume_single_subtask, \u0438\u0437-\u0437\u0430 \u0447\u0435\u0433\u043e validate_step 2.4 \u043e\u0442\u0440\u0430\u0431\u043e\u0442\u0430\u043b \u0438\u0434\u0435\u043c\u043f\u043e\u0442\u0435\u043d\u0442\u043d\u044b\u043c no-op \u0438 \u043d\u0435 \u043f\u0440\u043e\u0434\u0432\u0438\u043d\u0443\u043b \u043f\u043e\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c."
+    },
+    "ST-002": {
+      "subtask_id": "ST-002",
+      "files_changed": [
+        "internal/cgroup/driver.go",
+        "internal/cgroup/path.go",
+        "internal/cgroup/path_test.go",
+        "internal/cgroup/knob.go",
+        "internal/cgroup/knob_test.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "status": "valid",
+      "summary": "\u0421\u043b\u043e\u0439 cgroup: \u043f\u0443\u0442\u044c \u0438\u0437 UID+QoS \u0447\u0435\u0440\u0435\u0437 ExpandSlice (\u0441\u043e\u0432\u043f\u0430\u043b \u0441\u043e \u0441\u0442\u0435\u043d\u0434\u043e\u0432\u044b\u043c \u044d\u0442\u0430\u043b\u043e\u043d\u043e\u043c), WriteKnob \u0441 \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u043e\u043c \u043e\u0448\u0438\u0431\u043a\u0438 Close, allow-list guard \u043d\u0430 pod-cgroup, ErrCgroupGone \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435 EINVAL"
+    },
+    "ST-003": {
+      "subtask_id": "ST-003",
+      "files_changed": [
+        "internal/envgate/reason.go",
+        "internal/envgate/gate.go",
+        "internal/envgate/gate_test.go",
+        "go.mod"
+      ],
+      "status": "valid",
+      "summary": "Environment gate: \u0434\u0435\u0442\u0435\u043a\u0442 v2 \u043f\u043e v2-\u043f\u0443\u0442\u044f\u043c (\u043d\u0435 \u043f\u043e v1-\u044d\u0432\u0440\u0438\u0441\u0442\u0438\u043a\u0435), \u043f\u043e\u0440\u043e\u0433 \u044f\u0434\u0440\u0430 5.15 \u0447\u0435\u0440\u0435\u0437 \u0447\u0438\u0441\u043b\u043e\u0432\u043e\u0435 \u0441\u0440\u0430\u0432\u043d\u0435\u043d\u0438\u0435, cgroupfs \u043a\u0430\u043a experimental \u0441 \u043e\u0434\u043d\u0438\u043c Warn, \u0433\u0435\u0439\u0442 \u043d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043f\u0438\u0448\u0435\u0442"
+    },
+    "ST-004": {
+      "subtask_id": "ST-004",
+      "files_changed": [
+        "internal/qos/qos.go",
+        "internal/qos/qos_test.go",
+        "internal/qos/weight.go",
+        "internal/qos/weight_test.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "status": "valid",
+      "summary": "\u0427\u0438\u0441\u0442\u044b\u0435 \u0444\u0443\u043d\u043a\u0446\u0438\u0438 QoS \u0438 \u0432\u0435\u0441\u0430: ClassOf \u043f\u043e spec \u0441 kubelet-\u043f\u0430\u0440\u0438\u0442\u0435\u0442\u043e\u043c, RestoreWeight \u0441 \u043a\u043e\u0440\u0440\u0435\u043a\u0442\u043d\u043e\u0439 \u0441\u0435\u043c\u0430\u043d\u0442\u0438\u043a\u043e\u0439 native sidecar \u0438 \u0437\u043d\u0430\u043c\u0435\u043d\u0430\u0442\u0435\u043b\u0435\u043c 262142, \u0437\u0430\u0449\u0438\u0449\u0451\u043d\u043d\u044b\u043c \u0442\u043e\u0447\u043a\u043e\u0439 1539m"
+    },
+    "ST-005": {
+      "subtask_id": "ST-005",
+      "files_changed": [
+        "internal/observe/metrics.go",
+        "internal/observe/metrics_test.go",
+        "internal/observe/events.go",
+        "internal/observe/recorder.go",
+        "internal/observe/recorder_test.go",
+        "internal/annotations/vc1_test.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "status": "valid",
+      "summary": "\u041c\u0435\u0442\u0440\u0438\u043a\u0438 \u0441 allowlist-\u043b\u0435\u0439\u0431\u043b\u0430\u043c\u0438, \u043f\u0440\u043e\u0432\u0435\u0440\u044f\u0435\u043c\u044b\u043c \u0432 \u043a\u043e\u043d\u0441\u0442\u0440\u0443\u043a\u0442\u043e\u0440\u0435; Recorder \u0430\u0442\u043e\u043c\u0430\u0440\u043d\u043e \u043f\u0438\u0448\u0435\u0442 \u043c\u0435\u0442\u0440\u0438\u043a\u0443 \u0438 Event; \u0441\u043b\u043e\u0432\u0430\u0440\u044c reason \u0437\u0430\u043a\u0440\u044b\u0442 \u0432\u043e\u0441\u0435\u043c\u044c\u044e \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f\u043c\u0438 \u0441 fallback other \u043f\u0440\u043e\u0442\u0438\u0432 \u0442\u0435\u043a\u0441\u0442\u0430 \u043e\u0448\u0438\u0431\u043a\u0438 \u044f\u0434\u0440\u0430"
+    },
+    "ST-006": {
+      "subtask_id": "ST-006",
+      "files_changed": [
+        "internal/tier/note.go",
+        "internal/tier/desired.go",
+        "internal/tier/desired_test.go"
+      ],
+      "status": "valid",
+      "summary": "Desired(pod): idle \u0438 burst \u043d\u0435\u0437\u0430\u0432\u0438\u0441\u0438\u043c\u044b, \u043d\u0435\u0437\u043d\u0430\u043a\u043e\u043c\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0438 burst \u0431\u0435\u0437 \u043a\u0432\u043e\u0442\u044b \u0434\u0430\u044e\u0442 \u043d\u043e\u0442\u0443 \u0432\u043c\u0435\u0441\u0442\u043e \u043e\u0448\u0438\u0431\u043a\u0438; \u043f\u0440\u0430\u0432\u0438\u043b\u043e \u043a\u0432\u043e\u0442\u044b \u2014 limits.cpu \u0443 \u0432\u0441\u0435\u0445 \u043a\u043e\u043d\u0442\u0435\u0439\u043d\u0435\u0440\u043e\u0432 \u0432\u043a\u043b\u044e\u0447\u0430\u044f init, \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0436\u0434\u0435\u043d\u043e \u0442\u0440\u0435\u043c\u044f \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u044f\u043c\u0438 \u043d\u0430 \u0441\u0442\u0435\u043d\u0434\u0435"
+    },
+    "ST-007": {
+      "subtask_id": "ST-007",
+      "files_changed": [
+        "internal/apply/snapshot.go",
+        "internal/apply/plan.go",
+        "internal/apply/plan_test.go",
+        "internal/apply/apply.go",
+        "internal/apply/apply_test.go",
+        "internal/apply/apply_integration_test.go",
+        "internal/cgroup/knob.go",
+        "internal/cgroup/knob_test.go"
+      ],
+      "status": "valid",
+      "summary": "\u041f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u0435\u043b\u044c \u0442\u0438\u0440\u043e\u0432: \u043d\u0430\u0431\u043b\u044e\u0434\u0430\u0435\u043c\u044b\u0439 \u043f\u043b\u0430\u043d \u0441 \u043f\u043e\u0440\u044f\u0434\u043a\u043e\u043c burst \u0440\u0430\u043d\u044c\u0448\u0435 idle, \u0435\u0434\u0438\u043d\u0438\u0447\u043d\u044b\u0439 Snapshot, EINVAL \u0431\u0435\u0437 \u0440\u0435\u0442\u0440\u0430\u0435\u0432, \u0434\u0432\u0430 \u0440\u0430\u0437\u043d\u044b\u0445 \u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044f AC-16; \u0437\u0430\u043e\u0434\u043d\u043e \u0437\u0430\u043a\u0440\u044b\u0442 \u0445\u0432\u043e\u0441\u0442 ST-002 \u2014 guard \u043f\u043e\u043b\u0443\u0447\u0438\u043b \u044f\u0432\u043d\u044b\u0439 \u043a\u043e\u0440\u0435\u043d\u044c"
+    },
+    "ST-008": {
+      "subtask_id": "ST-008",
+      "files_changed": [
+        "internal/apply/revert.go",
+        "internal/apply/revert_test.go"
+      ],
+      "status": "valid",
+      "summary": "\u0421\u043d\u044f\u0442\u0438\u0435 \u0442\u0438\u0440\u0430: cpu.idle=0, \u0437\u0430\u0442\u0435\u043c \u0432\u0435\u0441 \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e spec, \u0437\u0430\u0442\u0435\u043c \u0441\u043d\u044f\u0442\u0438\u0435 burst; \u043a\u0435\u0448\u0430 \u0432\u0435\u0441\u0430 \u043d\u0435\u0442, \u0438 \u0430\u043d\u0442\u0438\u043a\u0435\u0448-\u0442\u0435\u0441\u0442 \u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d \u0434\u0432\u0443\u043c\u044f \u043d\u0435\u0437\u0430\u0432\u0438\u0441\u0438\u043c\u044b\u043c\u0438 \u043c\u0443\u0442\u0430\u0446\u0438\u044f\u043c\u0438"
+    },
+    "ST-009": {
+      "subtask_id": "ST-009",
+      "files_changed": [
+        "internal/agent/informer.go",
+        "internal/agent/informer_test.go",
+        "internal/agent/reconciler.go",
+        "internal/agent/reconciler_test.go",
+        "internal/apply/apply.go",
+        "internal/apply/revert.go",
+        "internal/qos/qos.go"
+      ],
+      "status": "valid",
+      "summary": "Informer \u0441 fieldSelector \u043f\u043e \u0441\u0432\u043e\u0435\u0439 \u043d\u043e\u0434\u0435 \u0438 resync 60\u0441, Add/Update/Delete, \u0438\u0434\u0435\u043c\u043f\u043e\u0442\u0435\u043d\u0442\u043d\u044b\u0439 Reconcile \u0447\u0435\u0440\u0435\u0437 BuildPlan; \u0433\u043e\u043d\u043a\u0430 \u0432 \u0442\u0435\u0441\u0442\u0435 AC-12 \u0443\u0431\u0440\u0430\u043d\u0430, \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435 QoS \u0432\u044b\u043d\u0435\u0441\u0435\u043d\u043e \u0432 \u0435\u0434\u0438\u043d\u0441\u0442\u0432\u0435\u043d\u043d\u044b\u0439 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a"
+    },
+    "ST-010": {
+      "subtask_id": "ST-010",
+      "files_changed": [
+        "cmd/agent/main.go",
+        "cmd/agent/main_test.go",
+        "internal/agent/lifecycle.go",
+        "internal/agent/lifecycle_test.go",
+        "internal/agent/health.go"
+      ],
+      "status": "valid",
+      "summary": "cmd/agent: \u0433\u0435\u0439\u0442, \u043c\u0435\u0442\u0440\u0438\u043a\u0438 \u0438 health; \u043d\u0430 \u043d\u0435\u043f\u0440\u043e\u0439\u0434\u0435\u043d\u043d\u043e\u043c \u0433\u0435\u0439\u0442\u0435 \u0436\u0438\u0432\u0451\u0442 not-ready \u0441 \u043f\u0440\u0438\u0447\u0438\u043d\u043e\u0439 \u0438 \u0441\u043e\u0431\u044b\u0442\u0438\u044f\u043c\u0438 \u0431\u0435\u0437 applier; \u043d\u0430 SIGTERM \u043d\u0438 \u043e\u0434\u043d\u043e\u0439 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432 cgroup"
+    },
+    "ST-011": {
+      "subtask_id": "ST-011",
+      "files_changed": [
+        "internal/agent/revertall.go",
+        "internal/agent/revertall_test.go",
+        "cmd/agent/main.go"
+      ],
+      "status": "valid",
+      "summary": "\u0420\u0435\u0436\u0438\u043c --revert-all: \u043e\u0434\u043d\u043e\u0440\u0430\u0437\u043e\u0432\u044b\u0439 \u043f\u0440\u043e\u0445\u043e\u0434 \u043f\u043e \u043f\u043e\u0434\u0430\u043c \u043d\u043e\u0434\u044b \u043f\u043e \u0436\u0438\u0432\u043e\u043c\u0443 \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u044e cgroup, \u0431\u0435\u0437 informer \u0438 \u043c\u0435\u0442\u0440\u0438\u043a, \u043d\u0435 \u043e\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u043d\u0430 \u043f\u0435\u0440\u0432\u043e\u0439 \u043e\u0448\u0438\u0431\u043a\u0435, ErrCgroupGone \u043d\u0435 \u0441\u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044f \u043f\u0440\u043e\u0432\u0430\u043b\u043e\u043c"
+    },
+    "ST-012": {
+      "subtask_id": "ST-012",
+      "files_changed": [
+        "config/base/daemonset.yaml",
+        "config/base/rbac.yaml",
+        "config/base/namespace.yaml",
+        "config/base/kustomization.yaml",
+        "config/samples/pod-idle.yaml",
+        "config/samples/pod-burst.yaml",
+        "config/samples/pod-both.yaml",
+        "Dockerfile",
+        "Makefile",
+        "hack/check-manifests.sh"
+      ],
+      "status": "valid",
+      "summary": "\u041c\u0430\u043d\u0438\u0444\u0435\u0441\u0442\u044b: DaemonSet \u0431\u0435\u0437 privileged \u0438 SYS_ADMIN, \u043c\u0438\u043d\u0438\u043c\u0430\u043b\u044c\u043d\u044b\u0439 RBAC, distroless-\u043e\u0431\u0440\u0430\u0437; check-manifests.sh \u043b\u043e\u0432\u0438\u0442 \u043b\u0438\u0448\u043d\u0438\u0435 \u043f\u0440\u0438\u0432\u0438\u043b\u0435\u0433\u0438\u0438 \u0442\u043e\u0447\u043d\u044b\u043c \u0441\u0440\u0430\u0432\u043d\u0435\u043d\u0438\u0435\u043c \u043c\u043d\u043e\u0436\u0435\u0441\u0442\u0432; server-side dry-run \u043d\u0430 \u0436\u0438\u0432\u043e\u043c \u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0435 \u043f\u0440\u043e\u0448\u0451\u043b"
+    },
+    "ST-013": {
+      "subtask_id": "ST-013",
+      "files_changed": [
+        "test/e2e/preflight_test.go",
+        "test/e2e/e2e_test.go",
+        "test/e2e/helpers.go",
+        "test/e2e/kind-config.yaml",
+        ".github/workflows/ci.yaml"
+      ],
+      "status": "valid",
+      "summary": "Open Question 1 \u0437\u0430\u043a\u0440\u044b\u0442 \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u0438\u0435\u043c: kind \u043d\u0435\u0441\u0442\u0438\u0442 kubepods \u043f\u043e\u0434 kubelet.slice, \u0432\u0438\u0434 \u043d\u0435 \u0441\u0445\u043e\u0434\u0438\u0442\u0441\u044f; \u0441\u0440\u0430\u0431\u043e\u0442\u0430\u043b \u0437\u0430\u0440\u0430\u043d\u0435\u0435 \u0441\u043e\u0433\u043b\u0430\u0441\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u0437\u0430\u043f\u0430\u0441\u043d\u043e\u0439 \u043f\u0443\u0442\u044c, \u0430 \u043f\u043e\u0432\u0435\u0434\u0435\u043d\u0438\u0435 AC-6/INV-5 \u0437\u0430\u043e\u0434\u043d\u043e \u043f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u043b\u043e\u0441\u044c \u043d\u0430 \u0436\u0438\u0432\u043e\u043c \u043a\u043b\u0430\u0441\u0442\u0435\u0440\u0435"
+    },
+    "ST-015": {
+      "subtask_id": "ST-015",
+      "files_changed": [
+        "README.md",
+        "hack/check-readme-keys.sh"
+      ],
+      "status": "valid",
+      "summary": "README: \u043e\u0431\u0430 \u0442\u0438\u0440\u0430 \u0447\u0435\u0440\u0435\u0437 \u0440\u0430\u043c\u043a\u0443 Maximum/Yield/Progress, \u043c\u0430\u0442\u0440\u0438\u0446\u0430 supported, VPA-\u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435 \u043a\u0430\u043a \u0438\u0437\u043c\u0435\u0440\u0435\u043d\u043d\u044b\u0439 \u0444\u0430\u043a\u0442, \u0447\u0435\u0441\u0442\u043d\u044b\u0439 \u0440\u0430\u0437\u0434\u0435\u043b \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e\u0441\u0442\u0438, Non-goals \u0438 \u043f\u0440\u0430\u0432\u0434\u0430 \u043f\u0440\u043e kind; \u0441\u043a\u0440\u0438\u043f\u0442 \u043b\u043e\u0432\u0438\u0442 \u0440\u0430\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435 \u043a\u043b\u044e\u0447\u0435\u0439 \u0438 \u0437\u0430\u043f\u0440\u0435\u0449\u0451\u043d\u043d\u044b\u0435 \u0437\u0430\u044f\u0432\u043b\u0435\u043d\u0438\u044f"
+    }
+  },
+  "last_subtask_commit_sha": null,
+  "contract_ready_subtasks": {},
+  "clean_retry_count": 0,
+  "contaminated_retry_count": 4,
+  "scope_feedback_subtasks": [],
+  "progress_feedback_subtasks": [],
+  "retry_isolation_status": {
+    "ST-002": "normal_retry",
+    "ST-004": "normal_retry",
+    "ST-006": "normal_retry",
+    "ST-012": "normal_retry"
+  },
+  "retry_quarantine_paths": {},
+  "completed_at": null,
+  "subtask_completion_reasons": {
+    "ST-001": {
+      "kind": "noop",
+      "reason": "\u0420\u0430\u0431\u043e\u0442\u0430 \u0432\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0430 \u0438 \u0437\u0430\u043f\u0438\u0441\u0430\u043d\u0430 \u0447\u0435\u0440\u0435\u0437 record_subtask_result; Monitor valid=true recommendation=approve. \u041a\u0443\u0440\u0441\u043e\u0440 \u0434\u0432\u0438\u0433\u0430\u044e \u0432\u0440\u0443\u0447\u043d\u0443\u044e: \u0441\u043e\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c \u043e\u0442 \u043e\u0434\u0438\u043d\u043e\u0447\u043d\u043e\u0433\u043e \u043f\u0440\u043e\u0433\u043e\u043d\u0430 ST-014 \u0447\u0435\u0440\u0435\u0437 resume_single_subtask, \u0438\u0437-\u0437\u0430 \u0447\u0435\u0433\u043e validate_step 2.4 \u043e\u0442\u0440\u0430\u0431\u043e\u0442\u0430\u043b \u0438\u0434\u0435\u043c\u043f\u043e\u0442\u0435\u043d\u0442\u043d\u044b\u043c no-op \u0438 \u043d\u0435 \u043f\u0440\u043e\u0434\u0432\u0438\u043d\u0443\u043b \u043f\u043e\u0441\u043b\u0435\u0434\u043e\u0432\u0430\u0442\u0435\u043b\u044c\u043d\u043e\u0441\u0442\u044c.",
+      "recorded_at": "2026-08-16T20:29:16.577593Z"
+    }
+  },
+  "hook_injection_counts": {
+    "skipped": 34,
+    "injected": 28,
+    "deduped": 5
+  },
+  "hook_injection": {
+    "status": "injected",
+    "reason": "reminder emitted",
+    "tool_name": "Bash",
+    "additional_context_chars": 193,
+    "updated_at": "2026-08-17T11:07:19.611072Z"
+  }
+}

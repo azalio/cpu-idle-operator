@@ -1,0 +1,995 @@
+{
+  "schema_version": "2.0",
+  "analysis": {
+    "assumptions": [
+      "Greenfield: репозиторий пуст, каждый файл в affected_files создаётся с нуля (все пути продублированы в creates_files).",
+      "Go module path github.com/azalio/cpi-idle-operator, CI — GitHub Actions, лицензия Apache-2.0 приняты из раздела Decisions Made (Open Question 3: возражения дешевле до первого коммита).",
+      "Формула веса kubelet для cgroup v2: shares = max(2, milliCPU*1024/1000), weight = 1 + ((shares-2)*9999)/262142. Проверяется по измеренной паре 500m -> 20 и по граничному случаю отсутствия requests -> 1.",
+      "Детект драйвера идёт по v2-путям /sys/fs/cgroup/kubepods.slice (systemd) и /sys/fs/cgroup/kubepods (cgroupfs) — правка №1 из резолюции T-002; v1-пути из первой редакции исследования не используются.",
+      "Величина burst берётся из поля quota файла cpu.max того же pod-cgroup; числовое значение аннотации не парсится (Soft-ограничение SC-2).",
+      "controller-runtime используется только как библиотека: informer/cache + record.EventRecorder + metrics registry. Manager с leader election, CRD и webhook не подключаются (HC-4).",
+      "Глубина графа зависимостей 9 (ST-001 -> ST-005 -> ST-006 -> ST-007 -> ST-008 -> ST-009 -> ST-010 -> ST-012 -> ST-013) превышает рекомендованный порог 5. Это следствие greenfield-слоистости: каждый следующий слой физически читает символы предыдущего. Дробить граф искусственно означало бы придумать ложные швы.",
+      "Отдельная подзадача под unit-тесты не создаётся: T-012 привязывает табличные тесты (путь, вес, детект окружения, дифф) к тем же модулям, что их реализуют, и держать их в отдельной подзадаче означало бы разорвать пару реализация/тест. Каждая подзадача несёт свои unit-тесты в test_strategy."
+    ],
+    "open_questions": [
+      "Open Question 1 спеки: согласованность cgroup-вида внутри kind-ноды не проверена. ST-013 помечена provisional; её первый шаг — pre-flight сравнение пути, который видит агент, с путём, который видит kubelet ноды. При расхождении e2e-гейт заменяется одноузловой нодой в CI.",
+      "Open Question 2 спеки: задержка применения тира не измерена. Ни в одном validation_criteria нет числового SLA — только ожидание факта применения с разумным таймаутом.",
+      "Не проверено, отдаёт ли kind-нода cpu.max.burst (зависит от ядра раннера CI). Если нет — burst-часть e2e деградирует до unit + стенда, а AC-3 остаётся закрытым unit-тестом и hack/stand-probe.sh."
+    ],
+    "scope_vs_quality_decision": "При нехватке бюджета режется SCOPE, не КАЧЕСТВО. Кандидаты на отсечение в этом порядке: ветка cgroupfs-драйвера (уже заявлена experimental), burst-часть e2e, расширенные сценарии stand-probe. Не режется никогда: проверка ошибки на Close (INV-3), порядок операций (INV-2, INV-7), запрет записи выше pod-cgroup (INV-1), поведение при остановке (INV-4), bounded-лейблы метрик (HC-5).",
+    "architecture_graph_summary": "cmd/agent -[uses]-> internal/agent.Reconciler -[uses]-> internal/apply.Applier; internal/apply.Applier -[calls]-> internal/cgroup.WriteKnob, internal/observe.Recorder; internal/apply.Revert -[calls]-> internal/qos.RestoreWeight; internal/agent.Informer -[watches]-> corev1.Pod (fieldSelector spec.nodeName); internal/tier.Desired -[reads]-> internal/annotations.Keys, internal/qos.ClassOf; internal/envgate.Gate -[gates]-> cmd/agent; config/base -[deploys]-> cmd/agent"
+  },
+  "blueprint": {
+    "id": "cpu-idle-operator-v1alpha1",
+    "summary": "Node-agent на Go: informer по подам своей ноды вычисляет желаемое состояние тиров из аннотаций и пишет cpu.idle / cpu.max.burst / cpu.weight строго в pod-cgroup через слой с параметризованным корнем. Слоистая сборка снизу вверх: cgroup -> окружение -> QoS и вес -> наблюдаемость -> желаемое состояние -> применение и снятие -> цикл реконсиляции -> бинарь -> манифесты -> гейты.",
+    "quality_requirements": {
+      "min_security_score": 7,
+      "min_functionality_score": 8,
+      "error_handling_required": true,
+      "rationale": "Агент пишет в файлы, которыми владеет kubelet, под uid 0 с hostPath /sys/fs/cgroup на запись. Ошибка, потерянная в буфере (INV-3), или запись выше pod-cgroup (INV-1) означают тихую деградацию продовых подов, а не падение. Репозиторий публичный и идёт к докладу — цена ошибки репутационная."
+    },
+    "hard_constraints": [
+      {"id": "HC-1", "description": "Только cgroup v2 unified. Обнаружены v1 или hybrid — агент отказывается работать с явным указанием причины.", "source": "spec"},
+      {"id": "HC-2", "description": "Минимальная версия ядра 5.15. Ниже — тот же отказ.", "source": "spec"},
+      {"id": "HC-3", "description": "Никаких обращений к CRI-сокету, к containerd и к /proc/<pid>/cgroup. Путь pod-cgroup выводится только из UID пода и его QoS-класса.", "source": "spec"},
+      {"id": "HC-4", "description": "В v1alpha1 нет CRD, нет admission webhook, нет leader election и нет второго бинаря.", "source": "spec"},
+      {"id": "HC-5", "description": "Метрики не содержат лейблов неограниченной мощности. pod_name, pod_uid, container_id запрещены.", "source": "spec"},
+      {"id": "HC-6", "description": "Манифест DaemonSet не требует privileged: true и не запрашивает SYS_ADMIN. Достаточно hostPath на запись и uid 0.", "source": "spec"}
+    ],
+    "soft_constraints": [
+      {"id": "SC-1", "description": "Ветка cgroupfs-драйвера реализуется, но заявляется experimental и сопровождается предупреждением в логе.", "source": "spec", "tradeoff_rationale": "Реализуется, но не покрывается ни e2e, ни стендом: ноды с cgroupfs нет (известный пробел из T-012). Именно поэтому experimental, а не supported."},
+      {"id": "SC-2", "description": "Величина burst по умолчанию равна квоте; переопределение числовым значением аннотации в первой версии не парсится.", "source": "spec", "tradeoff_rationale": "Числовое переопределение явно в Out of Scope. Значение аннотации игнорируется, но её присутствие фиксируется."}
+    ],
+    "coverage_map": {
+      "HC-4": "ST-001",
+      "CCR-2": "ST-001",
+      "INV-1": "ST-002",
+      "INV-3": "ST-002",
+      "HC-3": "ST-002",
+      "CCR-3": "ST-002",
+      "HC-1": "ST-003",
+      "HC-2": "ST-003",
+      "INV-5": "ST-003",
+      "SC-1": "ST-003",
+      "AC-14": "ST-004",
+      "AC-8": "ST-005",
+      "HC-5": "ST-005",
+      "AC-4": "ST-006",
+      "SC-2": "ST-006",
+      "AC-3": "ST-007",
+      "AC-13": "ST-007",
+      "AC-16": "ST-007",
+      "INV-7": "ST-007",
+      "CCR-1": "ST-007",
+      "AC-2": "ST-008",
+      "AC-15": "ST-008",
+      "INV-2": "ST-008",
+      "AC-1": "ST-009",
+      "AC-12": "ST-009",
+      "INV-6": "ST-009",
+      "AC-5": "ST-010",
+      "AC-6": "ST-010",
+      "INV-4": "ST-010",
+      "AC-7": "ST-011",
+      "HC-6": "ST-012",
+      "AC-10": "ST-013",
+      "AC-9": "ST-014",
+      "AC-11": "ST-015"
+    },
+    "deferred_yagni": [],
+    "evidence": [
+      {
+        "id": "EV-001",
+        "subtask": "ST-001",
+        "quote": "CCR-2. Ключи аннотаций пишутся из одной константы; README и оба комплекта слайдов доклада используют ровно их.",
+        "source": "spec_default.md, Cross-cutting CCR-2 + Decisions Made #4",
+        "boundary_rationale": "Константы ключей и границы состава компонентов (один бинарь, ни CRD, ни webhook, ни leader election) — это то, от чего зависят все остальные слои и что нельзя вводить дважды. Отдельный фундаментный шов до любого кода."
+      },
+      {
+        "id": "EV-002",
+        "subtask": "ST-002",
+        "quote": "CCR-3. Весь код работы с cgroup принимает корневой путь параметром, чтобы unit-тесты шли по временному каталогу и никогда не писали в настоящий /sys/fs/cgroup.",
+        "source": "spec_default.md, CCR-3 + INV-1 + INV-3 + HC-3",
+        "boundary_rationale": "Требование корня-параметром описывает именно слой, а не отдельную функцию. INV-1 (только pod-cgroup), INV-3 (ошибка на Close) и HC-3 (без /proc и CRI) — три свойства одного и того же слоя доступа к файлам, и все три проверяются одним набором табличных тестов по t.TempDir(). Слой идёт первым, потому что от него зависит почти всё."
+      },
+      {
+        "id": "EV-003",
+        "subtask": "ST-003",
+        "quote": "INV-5. На ноде, не прошедшей environment gate, агент не выполняет ни одной записи.",
+        "source": "spec_default.md, INV-5 + HC-1 + HC-2 + Soft-ограничение про cgroupfs",
+        "boundary_rationale": "Гейт — отдельный шов, потому что он один решает вопрос да/нет для всей ноды до и независимо от любых подов, и его отказ имеет собственный словарь причин (v1, hybrid, старое ядро, нет kubepods), который дальше потребляют и метрика, и readiness, и Event."
+      },
+      {
+        "id": "EV-004",
+        "subtask": "ST-004",
+        "quote": "Источник QoS-класса: вычисляем сами чистой функцией от spec по формуле kubelet. status.qosClass читаем только как сверку и логируем расхождение.",
+        "source": "spec_default.md, Decisions Made #14 + Decisions Made #7 + AC-14",
+        "boundary_rationale": "Спека прямо называет это чистой функцией от spec, а восстановление веса — тоже чистым пересчётом по формуле kubelet. Два чистых вычисления без единого побочного эффекта образуют естественный шов, тестируемый таблицей без файловой системы вообще."
+      },
+      {
+        "id": "EV-005",
+        "subtask": "ST-005",
+        "quote": "HC-5. Метрики не содержат лейблов неограниченной мощности. pod_name, pod_uid, container_id запрещены.",
+        "source": "spec_default.md, HC-5 + AC-8 + Decisions Made #13",
+        "boundary_rationale": "Запрет на лейблы — свойство схемы метрик, а не места вызова. Схему надо зафиксировать один раз и до первого инкремента, иначе запрещённый лейбл просочится через любой из вызывающих слоёв. Поэтому наблюдаемость идёт ДО применения тиров, а не после."
+      },
+      {
+        "id": "EV-006",
+        "subtask": "ST-006",
+        "quote": "Незнакомое значение ключа тира: трактуется как отсутствие тира, Event, не ошибка.",
+        "source": "spec_default.md, Edge Cases + AC-4 + Soft-ограничение про величину burst",
+        "boundary_rationale": "Разбор аннотаций и вычисление желаемого состояния не трогают cgroup вообще: это функция от pod spec в структуру намерения. Отделение этого шва от применения — то, что позволяет проверить AC-4 (burst без limits не ошибка, а Event) без единой записи в файловую систему."
+      },
+      {
+        "id": "EV-007",
+        "subtask": "ST-007",
+        "quote": "INV-7. При одновременной установке обоих тиров ширина полосы записывается раньше порядка выбора: сначала cpu.max.burst, затем cpu.idle. При снятии — в обратном порядке.",
+        "source": "spec_default.md, INV-7 + AC-13 + AC-3 + AC-16 + CCR-1",
+        "boundary_rationale": "Ядро вводит инварианты между соседними knob'ами, которых нет в API Kubernetes: порядок операций — самостоятельная сущность, а не деталь записи. AC-13 требует проверять порядок на последовательности вызовов, значит план записей обязан быть отдельным наблюдаемым артефактом, а не побочным эффектом."
+      },
+      {
+        "id": "EV-008",
+        "subtask": "ST-008",
+        "quote": "INV-2. cpu.weight не записывается никогда, пока cpu.idle=1. При снятии тира порядок строго: сначала cpu.idle=0, затем вес.",
+        "source": "spec_default.md, INV-2 + AC-2 + AC-15 + Edge Case про изменившийся requests.cpu",
+        "boundary_rationale": "Снятие тира отделено от установки, потому что несёт свой измеренный факт (переход 1->0 оставляет вес 100, а не request-derived) и своё требование к отсутствию кеша (AC-15 явно проваливает реализацию, кеширующую вес на входе). Это другая логика и другой набор тестов, чем у установки."
+      },
+      {
+        "id": "EV-009",
+        "subtask": "ST-009",
+        "quote": "AC-12. Аннотация, добавленная или снятая на уже живом поде, применяется и снимается так же, как заданная при создании. Реализация, обрабатывающая только событие добавления пода, обязана этот критерий провалить.",
+        "source": "spec_default.md, AC-12 + AC-1 + INV-6 + Decisions Made #10",
+        "boundary_rationale": "Событийный informer с resync 60 с — отдельный механизм со своим классом ошибок (пропущенный update, неидемпотентный повтор). Спека прямо помечает реализацию, обрабатывающую только add, как проваленную, — значит шов проходит по источнику событий, а не по записи."
+      },
+      {
+        "id": "EV-010",
+        "subtask": "ST-010",
+        "quote": "INV-4. Остановка агента любым способом не изменяет ни одного значения cgroup. Единственное исключение — явно запрошенный режим --revert-all.",
+        "source": "spec_default.md, INV-4 + AC-5 + AC-6 + Decisions Made #8",
+        "boundary_rationale": "Поведение процесса при старте на негодной ноде и при остановке — свойство бинаря, а не библиотечных слоёв. AC-6 требует остаться not-ready и не перезапускаться циклически: это решение принимается ровно в main, и проверить его можно только там."
+      },
+      {
+        "id": "EV-011",
+        "subtask": "ST-011",
+        "quote": "AC-7. Запуск с --revert-all снимает оба тира со всех подов ноды, восстанавливает веса и завершает процесс с нулевым кодом.",
+        "source": "spec_default.md, AC-7 + Decisions Made #8",
+        "boundary_rationale": "Осознанный откат объявлен отдельным режимом именно потому, что он противоположен INV-4 по смыслу: один и тот же бинарь, но другой жизненный цикл (одноразовый проход, код возврата вместо readiness). Отдельный шов защищает INV-4 от размывания."
+      },
+      {
+        "id": "EV-012",
+        "subtask": "ST-012",
+        "quote": "HC-6. Манифест DaemonSet не требует privileged: true и не запрашивает SYS_ADMIN. Измерено: достаточно hostPath на запись и uid 0.",
+        "source": "spec_default.md, HC-6 + Security Boundaries",
+        "boundary_rationale": "Манифесты и RBAC — отдельный артефакт поставки со своим гейтом (kustomize build + отсутствие privileged в отрендеренном YAML). Отрендеренный YAML бывает неверен, даже когда код в порядке."
+      },
+      {
+        "id": "EV-013",
+        "subtask": "ST-013",
+        "quote": "AC-10. E2E-прогон в kind: развёрнутый DaemonSet применяет тир к аннотированному поду и снимает его при удалении аннотации, проверка читает фактические значения из cgroup.",
+        "source": "spec_default.md, AC-10 + Open Question 1 + T-012 (что гейтит merge)",
+        "boundary_rationale": "Единственный уровень проверки, требующий настоящего кластера. Спека прямо помечает подзадачу как provisional до ответа на Open Question 1 — значит она обязана быть отдельной и отделяемой, чтобы её можно было заменить одноузловой нодой, не трогая остальное."
+      },
+      {
+        "id": "EV-014",
+        "subtask": "ST-014",
+        "quote": "AC-9. hack/stand-probe.sh печатает таблицу проверка / ожидалось / получилось по четырём фактам ... и возвращает ненулевой код при любом расхождении.",
+        "source": "spec_default.md, AC-9 + Decisions Made #11 + Unverified Runtime Assumption",
+        "boundary_rationale": "Четыре ядерных факта невоспроизводимы без настоящего kubelet, merge не блокируют и написаны на shell, а не на Go. Ни по инструменту, ни по гейту, ни по зависимостям этот артефакт не пересекается с кодом агента — шов проходит сам собой."
+      },
+      {
+        "id": "EV-015",
+        "subtask": "ST-015",
+        "quote": "AC-11. README ... Критерий проверяется ревью человека, а не автоматическим гейтом: грепом ключевых слов легко пройти с неверным объяснением.",
+        "source": "spec_default.md, AC-11 + Security Boundaries + Out of Scope",
+        "boundary_rationale": "Единственный критерий с человеческой приёмкой. Смешивать его с кодовыми подзадачами нельзя: автоматический гейт по нему принципиально не строится, и его нельзя закрывать зелёным CI."
+      }
+    ],
+    "subtasks": [
+      {
+        "id": "ST-001",
+        "title": "Bootstrap Go-модуль, константы ключей аннотаций и флаги агента",
+        "description": "Создать go.mod (module github.com/azalio/cpi-idle-operator), внести зависимости: sigs.k8s.io/controller-runtime (как библиотека), k8s.io/client-go, k8s.io/api, github.com/opencontainers/cgroups, github.com/prometheus/client_golang. Завести internal/annotations/keys.go с единственным определением TierKey = cpu.azalio.net/tier, TierValueIdle = idle, BurstKey = cpu.azalio.net/burst. Завести internal/config/flags.go с флагами --cgroup-root (default /sys/fs/cgroup), --node-name (default из env NODE_NAME), --resync-period (default 60s), --revert-all, --metrics-addr, --health-addr. Создать пустой cmd/agent/main.go, который только парсит флаги и печатает конфиг. Не подключать manager с leader election, не заводить api/ и config/crd, не заводить второй main-пакет.",
+        "dependencies": [],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 3,
+        "complexity_rationale": "Score 3: Base(1) + Novelty(+0, стандартный go mod init) + Deps(+0) + Scope(+1, 4 файла мелких) + Risk(+1, выбор версий зависимостей ещё не проверен сборкой)",
+        "expected_diff_size": "small",
+        "concern_type": "config",
+        "one_logical_step": true,
+        "requiredness": "repo_required",
+        "pruneable": false,
+        "prune_rationale": "Фундамент: без модуля и константы ключей ни одна последующая подзадача не компилируется, а CCR-2 нарушается по построению.",
+        "validation_criteria": [
+          "VC1 [HC-4]: во всём дереве ровно один пакет main (cmd/agent/main.go); go.mod не содержит зависимостей на apiextensions/CRD-генераторы, в коде нет вызовов webhook.NewServer и нет LeaderElection: true (проверяется grep-тестом test_vc1_no_forbidden_components)",
+          "VC2 [CCR-2]: строковый литерал cpu.azalio.net/ встречается ровно в одном файле internal/annotations/keys.go; тест test_vc2_single_annotation_source обходит ./... и падает при втором вхождении",
+          "VC3: go build ./... и go vet ./... проходят на чистом клоне без сети сверх go mod download"
+        ],
+        "contracts": [],
+        "aag_contract": "annotations+config packages -> Keys(TierKey, TierValueIdle, BurstKey) + ParseFlags(argv) -> единственный источник ключей и конфигурации; go build ./... собирает ровно один бинарь cmd/agent без CRD, webhook и leader election",
+        "implementation_hint": "Флаг --cgroup-root протаскивается дальше во все слои как параметр (CCR-3), а не читается из глобальной переменной; уже здесь заложить его в структуру config.Config.",
+        "test_strategy": {
+          "unit": "internal/annotations/keys_test.go::TestVC2SingleAnnotationSource (обход исходников на литерал ключа), internal/config/flags_test.go::TestVC3DefaultsAndOverrides",
+          "integration": "N/A",
+          "e2e": "N/A",
+          "scenario_dimensions": {
+            "happy_path": "Парсинг флагов по умолчанию даёт /sys/fs/cgroup и resync 60s",
+            "error": "Пустой --node-name и пустой env NODE_NAME дают явную ошибку старта, а не молчаливое watch по всем нодам",
+            "edge_case": "test_vc1_no_forbidden_components ловит появление второго main-пакета",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "go.mod",
+          "cmd/agent/main.go",
+          "internal/annotations/keys.go",
+          "internal/annotations/keys_test.go",
+          "internal/config/flags.go",
+          "internal/config/flags_test.go",
+          "LICENSE",
+          ".gitignore"
+        ],
+        "creates_files": [
+          "go.mod",
+          "cmd/agent/main.go",
+          "internal/annotations/keys.go",
+          "internal/annotations/keys_test.go",
+          "internal/config/flags.go",
+          "internal/config/flags_test.go",
+          "LICENSE"
+        ]
+      },
+      {
+        "id": "ST-002",
+        "title": "Реализовать слой cgroup: вычисление pod-cgroup path и запись knob с проверкой Close",
+        "description": "internal/cgroup/path.go: PodCgroupPath(root string, driver Driver, qos QoSClass, podUID string) (string, error). Для systemd — имя pod<uid с дефисами, заменёнными на подчёркивания>, сборка kubepods-<qos>-<pod>.slice и раскрытие через github.com/opencontainers/cgroups/systemd.ExpandSlice; для Guaranteed уровень qos отсутствует. Для cgroupfs — path.Join(root, kubepods, <qos>, pod<uid>). internal/cgroup/knob.go: ReadKnob(dir, name) и WriteKnob(dir, name, value) — открытие через os.OpenFile, обязательная проверка ошибки на Close с приоритетом над отложенной ошибкой Write, и guard, отвергающий любой dir, не являющийся вычисленным pod-cgroup каталогом (никаких QoS-слайсов, корня и container scope). ENOENT на каталоге возвращается отдельным сентинелом ErrCgroupGone. Ни одного обращения к /proc, CRI или containerd.",
+        "dependencies": ["ST-001"],
+        "risk_level": "medium",
+        "risks": [],
+        "security_critical": true,
+        "complexity_score": 6,
+        "complexity_rationale": "Score 6: Base(1) + Novelty(+2, внешняя ExpandSlice и systemd-экранирование) + Deps(+1) + Scope(+1, 2 файла + 2 теста) + Risk(+1, эталон пути должен совпасть с реально снятым на стенде)",
+        "expected_diff_size": "medium",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "Несёт INV-1, INV-3, HC-3 и CCR-3 — сплошь safety-required свойства; от слоя зависят все записи агента.",
+        "validation_criteria": [
+          "VC1 [CCR-3]: каждая экспортированная функция пакета принимает корень параметром; ни одного вхождения литерала /sys/fs/cgroup в internal/cgroup (проверяется тестом test_vc1_no_hardcoded_root), все unit-тесты работают под t.TempDir()",
+          "VC2 [INV-3]: WriteKnob возвращает ненулевую ошибку, когда Write прошёл, а Close вернул ошибку (test_vc2_close_error_surfaced через файл на заполненном tmpfs или подменённый writer)",
+          "VC3 [INV-1]: WriteKnob отвергает с ErrNotPodCgroup путь, указывающий на QoS-слайс (kubepods-burstable.slice), на корень kubepods.slice и на container scope (*.scope) — три отдельных кейса в test_vc3_write_target_guard",
+          "VC4 [HC-3]: grep-тест test_vc4_no_runtime_access подтверждает отсутствие в internal/ строк /proc/, unix:///run/containerd и импортов k8s.io/cri-api",
+          "VC5: табличный тест пути 2 драйвера x 3 QoS x UID с дефисами; эталон systemd-ветки — путь, реально снятый на стенде: /kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod<uid с подчёркиваниями>.slice"
+        ],
+        "contracts": [
+          {"type": "postcondition", "assertion": "WriteKnob returns err != nil WHEN close(fd) fails, even if write succeeded", "scope": "function", "source": "spec-invariant-INV-3"},
+          {"type": "precondition", "assertion": "dir MUST match pod-cgroup pattern; otherwise ErrNotPodCgroup and zero bytes written", "scope": "function", "source": "spec-invariant-INV-1"},
+          {"type": "postcondition", "assertion": "PodCgroupPath(root, ...) has prefix root ALWAYS", "scope": "function", "source": "spec-invariant-CCR-3"}
+        ],
+        "aag_contract": "cgroup package -> PodCgroupPath(root, driver, qos, uid) + WriteKnob(dir, name, value) -> путь совпадает со снятым на стенде эталоном; запись вне pod-cgroup отвергается, ошибка Close не теряется, ENOENT возвращается как ErrCgroupGone",
+        "implementation_hint": "Экранирование делать самим: pod + strings.ReplaceAll(uid, -, _), затем отдавать имя в systemd.ExpandSlice из github.com/opencontainers/cgroups — k8s.io/kubernetes не тянуть (T-002: монолит ~60 МБ). Guard на цель записи проще всего строить сравнением с результатом PodCgroupPath, а не регуляркой по имени.",
+        "test_strategy": {
+          "unit": "internal/cgroup/path_test.go::TestVC5PodCgroupPathTable, internal/cgroup/knob_test.go::TestVC2CloseErrorSurfaced, ::TestVC3WriteTargetGuard, ::TestVC1NoHardcodedRoot, ::TestVC4NoRuntimeAccess",
+          "integration": "N/A на этом слое; фактическая проверка пути на настоящем ядре входит в hack/stand-probe.sh (ST-014)",
+          "e2e": "N/A",
+          "scenario_dimensions": {
+            "happy_path": "Burstable под с UID с дефисами даёт эталонный systemd-путь; запись cpu.idle=1 читается обратно",
+            "error": "Close вернул ошибку -> WriteKnob вернул ошибку; каталог отсутствует -> ErrCgroupGone, а не generic error",
+            "edge_case": "Guaranteed (без уровня QoS в пути), BestEffort, cgroupfs-ветка, UID без дефисов",
+            "security": "Попытка записи в QoS-слайс, в корень kubepods и в container scope отвергается (INV-1)"
+          }
+        },
+        "affected_files": [
+          "internal/cgroup/path.go",
+          "internal/cgroup/path_test.go",
+          "internal/cgroup/knob.go",
+          "internal/cgroup/knob_test.go",
+          "internal/cgroup/driver.go",
+          "go.mod"
+        ],
+        "creates_files": [
+          "internal/cgroup/path.go",
+          "internal/cgroup/path_test.go",
+          "internal/cgroup/knob.go",
+          "internal/cgroup/knob_test.go",
+          "internal/cgroup/driver.go"
+        ]
+      },
+      {
+        "id": "ST-003",
+        "title": "Реализовать environment gate: cgroup v2 unified, ядро 5.15+, детект драйвера",
+        "description": "internal/envgate/gate.go: Check(root string, uname UnameFunc) (Result, error). Result несёт Ready bool, Reason (константы: ok, cgroup_v1, cgroup_hybrid, kernel_too_old, kubepods_missing, driver_unknown) и Driver (systemd|cgroupfs). Детект v2 — по наличию <root>/cgroup.controllers и по типу ФС cgroup2fs; наличие <root>/cpu/ или <root>/unified/ трактуется как v1/hybrid и даёт отказ. Детект драйвера — по v2-путям: <root>/kubepods.slice -> systemd, <root>/kubepods -> cgroupfs (правка №1 в резолюции T-002, v1-пути из первой редакции исследования не использовать). Версия ядра — из uname release, сравнение major.minor с 5.15. Для cgroupfs дополнительно писать в лог предупреждение experimental и выставлять Result.Experimental=true. Гейт возвращает решение, но сам ничего не пишет и не завершает процесс.",
+        "dependencies": ["ST-001", "ST-002"],
+        "risk_level": "medium",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 5,
+        "complexity_rationale": "Score 5: Base(1) + Novelty(+1, разбор версии ядра и типа ФС) + Deps(+1, 2 зависимости) + Scope(+1) + Risk(+1, отличить hybrid от чистой v2 надёжно — не полностью очевидно)",
+        "expected_diff_size": "small",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "safety_required",
+        "pruneable": false,
+        "prune_rationale": "INV-5 запрещает любую запись на непрошедшей гейт ноде; без гейта агент писал бы в среду, где cpu.idle не существует.",
+        "validation_criteria": [
+          "VC1 [HC-1]: фикстура чистой v2 даёт Ready=true; фикстура с <root>/cpu/ (v1) даёт Ready=false, Reason=cgroup_v1; фикстура с <root>/unified/ даёт Reason=cgroup_hybrid — три отдельных кейса в test_vc1_cgroup_version_gate",
+          "VC2 [HC-2]: uname 5.14.0 даёт Ready=false, Reason=kernel_too_old; 5.15.0 и 6.17.0-061700-generic дают Ready=true (test_vc2_kernel_floor)",
+          "VC3 [INV-5]: при Ready=false ни один вызов cgroup.WriteKnob не происходит — тест test_vc3_no_writes_when_gate_failed запускает путь применения поверх t.TempDir() и сверяет побайтовую неизменность дерева до и после",
+          "VC4 [SC-1]: детект cgroupfs даёт Driver=cgroupfs, Experimental=true и ровно одну строку лога уровня Warn со словом experimental (test_vc4_cgroupfs_experimental_warning)"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "gate.Result.Ready == false IMPLIES zero cgroup writes ALWAYS", "scope": "module", "source": "spec-invariant-INV-5"},
+          {"type": "postcondition", "assertion": "Result.Reason != ok WHEN cgroup version != v2_unified OR kernel < 5.15", "scope": "function", "source": "spec-invariant-INV-5"}
+        ],
+        "aag_contract": "envgate -> Check(cgroupRoot, uname) -> Result{Ready, Reason, Driver, Experimental}; v1/hybrid/ядро<5.15 дают Ready=false с конкретной причиной, и ни одна запись в cgroup не выполняется",
+        "implementation_hint": "UnameFunc и корень — параметры, чтобы тест не зависел от хоста. Тип ФС проверять через unix.Statfs и сверку f.Type с unix.CGROUP2_SUPER_MAGIC; наличие cgroup.controllers — вторая, независимая проверка (на пустой ноде каталога kubepods может ещё не быть, и это отдельная причина kubepods_missing, а не отказ по версии).",
+        "test_strategy": {
+          "unit": "internal/envgate/gate_test.go::TestVC1CgroupVersionGate, ::TestVC2KernelFloor, ::TestVC3NoWritesWhenGateFailed, ::TestVC4CgroupfsExperimentalWarning",
+          "integration": "N/A",
+          "e2e": "Косвенно: kind-нода обязана пройти гейт, иначе e2e (ST-013) падает с внятной причиной",
+          "scenario_dimensions": {
+            "happy_path": "Чистая v2 + systemd + ядро 6.17 -> Ready, Driver=systemd",
+            "error": "v1, hybrid, старое ядро — каждый со своей константой Reason",
+            "edge_case": "kubepods отсутствует (пустая нода) -> Reason=kubepods_missing, отдельно от driver_unknown; cgroupfs -> experimental",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "internal/envgate/gate.go",
+          "internal/envgate/gate_test.go",
+          "internal/envgate/reason.go"
+        ],
+        "creates_files": [
+          "internal/envgate/gate.go",
+          "internal/envgate/gate_test.go",
+          "internal/envgate/reason.go"
+        ]
+      },
+      {
+        "id": "ST-004",
+        "title": "Реализовать чистые функции QoS-класса и веса CPU по формуле kubelet",
+        "description": "internal/qos/qos.go: ClassOf(spec corev1.PodSpec) Class — вычисление Guaranteed/Burstable/BestEffort строго по формуле kubelet из spec, без чтения status. VerifyAgainstStatus(computed, status) — сверка со status.qosClass, при расхождении возвращает флаг и текст для лога, но вычисленное значение остаётся авторитетным. internal/qos/weight.go: RestoreWeight(spec) uint64 — сумма requests.cpu по контейнерам (включая init/sidecar по правилам kubelet), shares = max(2, milli*1024/1000), weight = 1 + ((shares-2)*9999)/262142. Отсутствие requests.cpu даёт вес 1. Никакого кеша и никакого состояния: функции чистые.",
+        "dependencies": ["ST-001"],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 4,
+        "complexity_rationale": "Score 4: Base(1) + Novelty(+1, формула kubelet воспроизводится по памяти и должна сойтись с измерением) + Deps(+0) + Scope(+1) + Risk(+1, правила суммирования init/sidecar контейнеров)",
+        "expected_diff_size": "small",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "QoS определяет путь pod-cgroup, а вес — то, что восстанавливается при снятии тира; без обеих функций AC-2 и AC-14 недостижимы.",
+        "validation_criteria": [
+          "VC1 [AC-14]: под без requests.cpu даёт RestoreWeight == 1 (test_vc1_no_request_weight_one)",
+          "VC2: под с requests.cpu 500m даёт RestoreWeight == 20 — измеренная на стенде пара, зафиксирована как эталон (test_vc2_measured_pair_500m_20)",
+          "VC3: ClassOf вычисляет Guaranteed/Burstable/BestEffort из spec; при расхождении с непустым status.qosClass VerifyAgainstStatus возвращает mismatch=true, а ClassOf-значение не меняется; пустой status.qosClass расхождением не считается (test_vc3_qos_from_spec_status_only_verifies)"
+        ],
+        "contracts": [
+          {"type": "postcondition", "assertion": "RestoreWeight(spec) == 1 WHEN sum(requests.cpu) == 0", "scope": "function"},
+          {"type": "invariant", "assertion": "ClassOf reads spec only; never reads pod.status ALWAYS", "scope": "function"}
+        ],
+        "aag_contract": "qos package -> ClassOf(spec) + RestoreWeight(spec) -> детерминированные чистые значения; 500m -> 20, без requests -> 1, status.qosClass используется только для сверки и лога",
+        "implementation_hint": "Сверять формулу с measured-парой в тесте, а не доверять выводу: если 500m не даёт ровно 20, формула воспроизведена неверно и это блокирует AC-2. Multi-container кейс брать из правил kubelet (суммирование requests обычных контейнеров, max с init).",
+        "test_strategy": {
+          "unit": "internal/qos/qos_test.go::TestVC3QoSFromSpec, internal/qos/weight_test.go::TestVC1NoRequestWeightOne, ::TestVC2MeasuredPair500m20, ::TestWeightTableMultiContainer",
+          "integration": "N/A",
+          "e2e": "N/A",
+          "scenario_dimensions": {
+            "happy_path": "Burstable 500m -> класс Burstable, вес 20",
+            "error": "Расхождение вычисленного класса со status.qosClass -> mismatch=true и текст для лога, без паники и без подмены значения",
+            "edge_case": "BestEffort без requests -> вес 1; несколько контейнеров; init-контейнер с большим request; requests в целых CPU",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "internal/qos/qos.go",
+          "internal/qos/qos_test.go",
+          "internal/qos/weight.go",
+          "internal/qos/weight_test.go"
+        ],
+        "creates_files": [
+          "internal/qos/qos.go",
+          "internal/qos/qos_test.go",
+          "internal/qos/weight.go",
+          "internal/qos/weight_test.go"
+        ]
+      },
+      {
+        "id": "ST-005",
+        "title": "Реализовать метрики с ограниченными лейблами и рекордер Event'ов на подах",
+        "description": "internal/observe/metrics.go: регистрация в отдельном prometheus.Registry — cpi_pods_in_tier{node,namespace,qos_class,tier} (gauge), cpi_tier_apply_total{node,namespace,qos_class,result,reason} (counter), cpi_resync_drift_total{node,namespace,qos_class} (counter), cpi_environment_gate_info{node,reason} (gauge 0/1). Allowlist разрешённых имён лейблов (node, namespace, qos_class, tier, result, reason) проверяется в конструкторе метрик и в тесте. internal/observe/events.go: тонкая обёртка над record.EventRecorder из controller-runtime с фиксированным набором reason'ов Event'ов (TierApplied, TierReverted, TierInactive, TierValueUnknown, EnvironmentUnsupported, WriteRejected) и обязательным указанием involvedObject = под. internal/observe/recorder.go: Recorder, объединяющий метрику и Event в один вызов, чтобы CCR-1 нельзя было нарушить забыв половину.",
+        "dependencies": ["ST-001"],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 4,
+        "complexity_rationale": "Score 4: Base(1) + Novelty(+1, EventRecorder из controller-runtime без manager) + Deps(+0) + Scope(+1, 3 файла) + Risk(+1, состав метрик должен закрыть AC-8 целиком)",
+        "expected_diff_size": "small",
+        "concern_type": "observability",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "AC-8 и HC-5 — приёмочные требования; схему метрик обязательно зафиксировать до первого инкремента, иначе запрещённый лейбл просочится через вызывающий слой.",
+        "validation_criteria": [
+          "VC1 [AC-8]: scrape тестового реестра отдаёт все четыре семейства — число подов в каждом тире, применения по результату, счётчик расхождений resync и причину отказа окружения (test_vc1_metric_families_present)",
+          "VC2 [HC-5]: конструктор паникует/возвращает ошибку при попытке объявить метрику с лейблом pod_name, pod_uid или container_id; тест test_vc2_forbidden_labels_rejected перебирает все три и дополнительно обходит зарегистрированные метрики, проверяя, что фактические имена лейблов входят в allowlist",
+          "VC3: Recorder.Applied(pod, knob, result, reason) в одном вызове инкрементит счётчик и пишет ровно один Event с involvedObject = этот под (test_vc3_metric_and_event_are_atomic на fake EventRecorder)"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "every registered metric label name IN allowlist{node,namespace,qos_class,tier,result,reason} ALWAYS", "scope": "module", "source": "spec-hard-constraint-HC-5"},
+          {"type": "postcondition", "assertion": "Recorder call emits exactly 1 event AND exactly 1 counter increment", "scope": "function", "source": "spec-cross-cutting-CCR-1"}
+        ],
+        "aag_contract": "observe package -> NewRecorder(registry, eventRecorder, node) -> Applied/Reverted/Inactive/Rejected; каждая метрика только с bounded-лейблами, каждый вызов даёт пару метрика+Event",
+        "implementation_hint": "EventRecorder брать через record.NewBroadcaster с client-go typed events, не поднимая controller-runtime Manager (HC-4). Реестр — собственный prometheus.NewRegistry, чтобы тест мог сделать полный gather без глобального состояния.",
+        "test_strategy": {
+          "unit": "internal/observe/metrics_test.go::TestVC1MetricFamiliesPresent, ::TestVC2ForbiddenLabelsRejected, internal/observe/recorder_test.go::TestVC3MetricAndEventAreAtomic",
+          "integration": "Проверка, что Event'ы реально доезжают до API-сервера, входит в e2e (ST-013)",
+          "e2e": "N/A на этом уровне",
+          "scenario_dimensions": {
+            "happy_path": "Применение тира даёт +1 к cpi_tier_apply_total{result=applied} и Event TierApplied",
+            "error": "Отказ записи даёт result=error и reason из ошибки, а не пустую строку",
+            "edge_case": "Reason конечного словаря: неизвестный reason нормализуется в other, чтобы не взорвать кардинальность через текст ошибки ядра",
+            "security": "test_vc2_forbidden_labels_rejected закрывает HC-5 — единственный способ утечки идентификаторов подов в метрики"
+          }
+        },
+        "affected_files": [
+          "internal/observe/metrics.go",
+          "internal/observe/metrics_test.go",
+          "internal/observe/events.go",
+          "internal/observe/recorder.go",
+          "internal/observe/recorder_test.go"
+        ],
+        "creates_files": [
+          "internal/observe/metrics.go",
+          "internal/observe/metrics_test.go",
+          "internal/observe/events.go",
+          "internal/observe/recorder.go",
+          "internal/observe/recorder_test.go"
+        ]
+      },
+      {
+        "id": "ST-006",
+        "title": "Реализовать разбор аннотаций тиров и вычисление желаемого состояния пода",
+        "description": "internal/tier/desired.go: Desired(pod *corev1.Pod) (State, []Note). State несёт IdleRequested bool, BurstRequested bool, BurstActive bool и QoS/UID для последующего вычисления пути. Правила: значение TierKey == idle включает idle; любое другое непустое значение даёт IdleRequested=false и Note{unknown_tier_value} (трактуется как отсутствие тира, не ошибка); присутствие BurstKey с любым значением включает BurstRequested, само значение не парсится (SC-2); отсутствие limits.cpu у пода с BurstKey даёт BurstActive=false и Note{no_cpu_limit}. Функция чистая, cgroup не трогает. Ноты транслируются вызывающим слоем в Event через observe.Recorder.",
+        "dependencies": ["ST-001", "ST-004", "ST-005"],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 4,
+        "complexity_rationale": "Score 4: Base(1) + Novelty(+0, чистый разбор) + Deps(+2, три зависимости) + Scope(+1) + Risk(+0, правила выписаны в спеке дословно)",
+        "expected_diff_size": "small",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "AC-4 и edge case про незнакомое значение ключа закрываются здесь; без отдельного слоя намерения их пришлось бы проверять через файловую систему.",
+        "validation_criteria": [
+          "VC1 [AC-4]: под с cpu.azalio.net/burst и без limits.cpu даёт BurstRequested=true, BurstActive=false, ровно одну Note с кодом no_cpu_limit и nil error; вызывающий слой обязан превратить эту ноту в Event TierInactive (test_vc1_burst_without_limit_is_note_not_error)",
+          "VC2 [SC-2]: аннотация burst со значением 200000 обрабатывается ровно так же, как с пустым значением: числовое переопределение не парсится, State не несёт поля с величиной (test_vc2_burst_value_ignored)",
+          "VC3: значение tier=aggressive даёт IdleRequested=false и Note{unknown_tier_value}; отсутствие ключа tier не даёт никакой ноты — разница проверяется явно (test_vc3_unknown_vs_absent_tier)",
+          "VC4: под с обеими аннотациями сразу даёт IdleRequested=true и BurstRequested=true независимо друг от друга (test_vc4_both_tiers_independent)"
+        ],
+        "contracts": [
+          {"type": "postcondition", "assertion": "Desired returns err == nil ALWAYS; проблемы выражаются нотами, не ошибками", "scope": "function"},
+          {"type": "invariant", "assertion": "Desired reads pod.Spec and pod.Annotations only; no filesystem access ALWAYS", "scope": "function"}
+        ],
+        "aag_contract": "tier package -> Desired(pod) -> State{IdleRequested, BurstRequested, BurstActive} + Notes; незнакомое значение и burst без limits дают ноту, а не ошибку; величина аннотации burst игнорируется",
+        "implementation_hint": "Ключи брать только из internal/annotations (CCR-2). Ноты сделать типизированными константами — их коды идут прямиком в лейбл reason метрики, и свободный текст сломал бы bounded-кардинальность (HC-5).",
+        "test_strategy": {
+          "unit": "internal/tier/desired_test.go::TestVC1BurstWithoutLimitIsNote, ::TestVC2BurstValueIgnored, ::TestVC3UnknownVsAbsentTier, ::TestVC4BothTiersIndependent",
+          "integration": "N/A",
+          "e2e": "N/A",
+          "scenario_dimensions": {
+            "happy_path": "tier=idle -> IdleRequested=true без нот",
+            "error": "Ни один вход не приводит к ошибке — проверяется отдельным property-подобным перебором аннотаций",
+            "edge_case": "Пустая строка в значении tier, регистр (Idle vs idle) трактуется как незнакомое значение, burst без limits, оба ключа сразу",
+            "security": "N/A — любой владелец пода вправе выставить тир (Decisions Made #3), проверки прав здесь сознательно нет"
+          }
+        },
+        "affected_files": [
+          "internal/tier/desired.go",
+          "internal/tier/desired_test.go",
+          "internal/tier/note.go"
+        ],
+        "creates_files": [
+          "internal/tier/desired.go",
+          "internal/tier/desired_test.go",
+          "internal/tier/note.go"
+        ]
+      },
+      {
+        "id": "ST-007",
+        "title": "Реализовать упорядоченный применитель тиров: план записей, burst раньше idle, след на каждое изменение",
+        "description": "internal/apply/plan.go: BuildPlan(desired tier.State, actual Snapshot) []Write — упорядоченный список записей. Для установки порядок строго [cpu.max.burst, cpu.idle] (INV-7), для снятия — обратный [cpu.idle, ..., cpu.max.burst]. План — наблюдаемый артефакт, чтобы порядок проверялся на последовательности, а не только на конечном состоянии. internal/apply/apply.go: Applier.Apply(ctx, pod) — читает Snapshot текущих значений (cpu.idle, cpu.weight, cpu.max, cpu.max.burst) из pod-cgroup, строит план, исполняет его через cgroup.WriteKnob, на каждую фактически выполненную запись вызывает observe.Recorder (метрика + Event). Величина burst берётся из поля quota файла cpu.max того же pod-cgroup. ErrCgroupGone (под удалён между чтением из informer и записью) даёт тихий возврат без ошибки, без Event и без инкремента. EINVAL от ядра (например, понижение лимита ниже burst) фиксируется как result=einval с Event, но не ретраится в цикле.",
+        "dependencies": ["ST-002", "ST-005", "ST-006"],
+        "risk_level": "high",
+        "risks": [
+          "Порядок операций нигде не выражен в API Kubernetes: любая перестановка записей проходит компиляцию и тесты конечного состояния, но нарушает ядерный инвариант. Защита — проверка последовательности вызовов, а не только результата.",
+          "Формат cpu.max (max 100000 при отсутствии квоты) обязан разбираться корректно: приняв max за число, агент вычислит абсурдный burst.",
+          "EINVAL от ядра приходит текстом ошибки ядра; попадание этого текста в лейбл reason взорвёт кардинальность метрики (HC-5) — нужна нормализация в конечный словарь."
+        ],
+        "security_critical": true,
+        "complexity_score": 8,
+        "complexity_rationale": "Score 8: Base(1) + Novelty(+2, порядок операций как отдельная сущность и разбор cpu.max) + Deps(+2, три зависимости) + Scope(+2, 4 файла + тесты последовательности) + Risk(+1, ядерные инварианты не выражены в API)",
+        "expected_diff_size": "medium",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "Ядро продукта: AC-3, AC-13, AC-16, INV-7 и CCR-1 закрываются только здесь.",
+        "validation_criteria": [
+          "VC1 [AC-3]: под с аннотацией burst и limits.cpu, чей cpu.max содержит 100000 100000, получает cpu.max.burst == 100000, равный квоте (test_vc1_burst_equals_quota); при cpu.max == max 100000 квоты нет и запись не выполняется",
+          "VC2 [AC-13]: под с обеими аннотациями даёт зафиксированную последовательность записей ровно [cpu.max.burst, cpu.idle] — утверждение на журнале вызовов фейкового writer'а, а не только на конечных значениях файлов (test_vc2_apply_order_is_burst_then_idle)",
+          "VC3 [INV-7]: BuildPlan для снятия обоих тиров возвращает обратный порядок — cpu.idle раньше cpu.max.burst (test_vc3_revert_plan_order_is_reversed)",
+          "VC4 [AC-16]: два вида молчания различаются явно — значение tier=aggressive даёт ноль записей и ровно один Event TierValueUnknown; отсутствующий каталог pod-cgroup даёт ноль записей, ноль Event'ов и nil error (test_vc4_unknown_value_vs_missing_cgroup, два независимых assert-блока)",
+          "VC5 [CCR-1]: число инкрементов cpi_tier_apply_total и число Event'ов равно числу фактически выполненных записей — ни одного изменения cgroup без следа (test_vc5_every_write_leaves_trace)"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "plan index(cpu.max.burst) < index(cpu.idle) WHEN direction == apply", "scope": "function", "source": "spec-invariant-INV-7"},
+          {"type": "invariant", "assertion": "plan index(cpu.idle) < index(cpu.max.burst) WHEN direction == revert", "scope": "function", "source": "spec-invariant-INV-7"},
+          {"type": "postcondition", "assertion": "events_emitted == writes_executed AND counter_increments == writes_executed", "scope": "module", "source": "spec-cross-cutting-CCR-1"},
+          {"type": "postcondition", "assertion": "Apply returns nil AND writes == 0 AND events == 0 WHEN pod-cgroup dir is gone (ErrCgroupGone)", "scope": "function"}
+        ],
+        "aag_contract": "apply.Applier -> Apply(ctx, pod) -> BuildPlan даёт упорядоченный список записей (burst раньше idle), исполняет его через cgroup.WriteKnob и на каждую запись зовёт observe.Recorder; исчезнувший каталог даёт тихий nil, незнакомое значение — Event без записей",
+        "implementation_hint": "Writer в Applier — интерфейс, чтобы тест подставил журналирующую реализацию и проверил именно последовательность (AC-13 требует проверки на вызовах). Snapshot читать один раз в начале Apply: повторное чтение между записями открывает окно гонки и делает план невоспроизводимым.",
+        "test_strategy": {
+          "unit": "internal/apply/plan_test.go::TestVC2ApplyOrderIsBurstThenIdle, ::TestVC3RevertPlanOrderIsReversed, internal/apply/apply_test.go::TestVC1BurstEqualsQuota, ::TestVC4UnknownValueVsMissingCgroup, ::TestVC5EveryWriteLeavesTrace",
+          "integration": "internal/apply/apply_integration_test.go — исполнение плана поверх реального дерева-фикстуры в t.TempDir() с проверкой содержимого файлов",
+          "e2e": "AC-3 и AC-13 подтверждаются на настоящем ядре в hack/stand-probe.sh (ST-014); в kind — по возможности (ST-013)",
+          "scenario_dimensions": {
+            "happy_path": "Оба тира применяются в правильном порядке, значения на месте, следы записаны",
+            "error": "EINVAL от ядра при записи burst выше квоты -> result=einval, Event, отсутствие бесконечного ретрая",
+            "edge_case": "cpu.max == max (нет квоты), исчезнувший каталог, незнакомое значение тира, повторный Apply на уже применённом состоянии (ноль записей)",
+            "security": "Попытка применить тир к пути вне pod-cgroup отвергается guard'ом из ST-002 и даёт Event WriteRejected (INV-1)"
+          }
+        },
+        "affected_files": [
+          "internal/apply/plan.go",
+          "internal/apply/plan_test.go",
+          "internal/apply/apply.go",
+          "internal/apply/apply_test.go",
+          "internal/apply/apply_integration_test.go",
+          "internal/apply/snapshot.go"
+        ],
+        "creates_files": [
+          "internal/apply/plan.go",
+          "internal/apply/plan_test.go",
+          "internal/apply/apply.go",
+          "internal/apply/apply_test.go",
+          "internal/apply/apply_integration_test.go",
+          "internal/apply/snapshot.go"
+        ]
+      },
+      {
+        "id": "ST-008",
+        "title": "Реализовать снятие тира: cpu.idle=0 первым, затем вес, пересчитанный из текущего spec",
+        "description": "internal/apply/revert.go: Applier.Revert(ctx, pod, state) — исполняет revert-план из ST-007. Порядок: cpu.idle=0, затем cpu.weight = qos.RestoreWeight(pod.Spec) (INV-2: вес не пишется, пока idle=1), затем снятие cpu.max.burst. Вес всегда пересчитывается из ТЕКУЩЕГО pod.Spec в момент снятия; в структуре Applier не должно быть ни одного поля, хранящего вес или requests с момента входа в idle. Каждая выполненная запись даёт метрику и Event через observe.Recorder.",
+        "dependencies": ["ST-004", "ST-007"],
+        "risk_level": "high",
+        "risks": [
+          "Соблазн закешировать вес при входе в idle выглядит естественной оптимизацией и молча ломает AC-15: под получит устаревшую долю CPU без единой ошибки в логе.",
+          "Если запись cpu.weight случится до успешной записи cpu.idle=0, ядро вернёт EINVAL (измерено на стенде для любого значения, включая текущее) — под останется с весом 100 вместо request-derived, то есть тихо заберёт впятеро больше доли."
+        ],
+        "security_critical": false,
+        "complexity_score": 7,
+        "complexity_rationale": "Score 7: Base(1) + Novelty(+1, порядок продиктован ядром) + Deps(+1, две зависимости) + Scope(+2, реализация + тесты последовательности и отсутствия кеша) + Risk(+2, тихая деградация вместо падения при ошибке)",
+        "expected_diff_size": "small",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "AC-2, AC-15 и INV-2 закрываются только здесь; без восстановления веса снятый с idle под получает вес 100 вместо положенного.",
+        "validation_criteria": [
+          "VC1 [AC-2]: снятие ключа tier у пода с requests.cpu 500m даёт последовательность [cpu.idle=0, cpu.weight=20]; итоговый cpu.idle == 0 и cpu.weight == 20 читаются из фикстуры (test_vc1_revert_restores_measured_pair)",
+          "VC2 [INV-2]: ни одна запись cpu.weight не происходит, пока snapshot показывает cpu.idle == 1 — журнал вызовов проверяется на то, что индекс записи cpu.idle=0 строго меньше индекса записи cpu.weight; отдельный кейс: если запись cpu.idle=0 вернула ошибку, запись веса не выполняется вовсе (test_vc2_no_weight_write_while_idle)",
+          "VC3 [AC-15]: requests.cpu изменился с 500m на 2 пока под был в idle — восстановленный вес вычислен из текущего spec, а не из значения на момент входа; дополнительно структурный тест test_vc3_no_cached_weight_field через reflect проверяет отсутствие в Applier полей с кешем веса/requests"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "write(cpu.weight) NEVER occurs WHILE cpu.idle == 1", "scope": "module", "source": "spec-invariant-INV-2"},
+          {"type": "precondition", "assertion": "write(cpu.idle, 0) succeeded BEFORE write(cpu.weight, w)", "scope": "function", "source": "spec-invariant-INV-2"},
+          {"type": "postcondition", "assertion": "restored_weight == RestoreWeight(pod.Spec at revert time), NOT the value observed at entry", "scope": "function"}
+        ],
+        "aag_contract": "apply.Applier -> Revert(ctx, pod, state) -> пишет cpu.idle=0, затем cpu.weight из qos.RestoreWeight(текущий spec), затем снимает cpu.max.burst; вес никогда не пишется при cpu.idle=1 и никогда не берётся из кеша",
+        "implementation_hint": "Ошибка записи cpu.idle=0 обязана прерывать план целиком: продолжение записью веса гарантированно даст EINVAL. Отсутствие кеша проще всего сделать конструктивно — Revert принимает *corev1.Pod и не имеет доступа к предыдущим версиям объекта.",
+        "test_strategy": {
+          "unit": "internal/apply/revert_test.go::TestVC1RevertRestoresMeasuredPair, ::TestVC2NoWeightWriteWhileIdle, ::TestVC3RequestChangedWhileIdle, ::TestVC3NoCachedWeightField",
+          "integration": "internal/apply/apply_integration_test.go — полный цикл apply -> revert поверх дерева в t.TempDir() с проверкой финальных значений",
+          "e2e": "AC-2 проверяется в kind e2e (ST-013) чтением фактического cpu.weight после снятия аннотации",
+          "scenario_dimensions": {
+            "happy_path": "500m -> снятие -> cpu.idle=0, cpu.weight=20",
+            "error": "Запись cpu.idle=0 не удалась -> вес не пишется, result=error, Event; каталог исчез -> тихий пропуск",
+            "edge_case": "Под без requests.cpu -> вес 1 (AC-14 через ST-004); requests изменился во время idle; снятие только одного из двух тиров",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "internal/apply/revert.go",
+          "internal/apply/revert_test.go",
+          "internal/apply/apply_integration_test.go"
+        ],
+        "creates_files": [
+          "internal/apply/revert.go",
+          "internal/apply/revert_test.go"
+        ]
+      },
+      {
+        "id": "ST-009",
+        "title": "Реализовать informer по подам своей ноды и идемпотентный цикл реконсиляции с resync 60 с",
+        "description": "internal/agent/informer.go: SharedInformer по corev1.Pod с fieldSelector spec.nodeName=<node> и resyncPeriod из конфига (default 60 с), собранный на client-go/controller-runtime cache без Manager и без leader election. Обработчики Add, Update и Delete кладут ключ пода в workqueue с rate limiting. internal/agent/reconciler.go: Reconcile(ctx, key) — достаёт под из кеша, вычисляет tier.Desired, читает Snapshot, сравнивает и вызывает Apply или Revert только при фактическом расхождении. Совпадение desired и actual — ноль записей, ноль Event'ов, никакого лога уровня Info (INV-6); расхождение, пойманное на resync, а не на событии, дополнительно инкрементит cpi_resync_drift_total.",
+        "dependencies": ["ST-003", "ST-007", "ST-008"],
+        "risk_level": "high",
+        "risks": [
+          "Обработка только Add — самая вероятная реализация по невнимательности, и спека прямо помечает её как проваливающую AC-12. Тест обязан бить именно по update-событию на существующем объекте.",
+          "fieldSelector spec.nodeName должен применяться на стороне API-сервера, а не фильтрацией в памяти: иначе агент на большом кластере вытягивает все поды и поверхность API-сервера перестаёт быть одним informer'ом, как обещано в Security Boundaries.",
+          "Идемпотентность легко нарушается сравнением строк с разным форматированием (например, 100000 100000 против 100000  100000): сравнивать нужно разобранные значения, а не сырой текст файла."
+        ],
+        "security_critical": false,
+        "complexity_score": 7,
+        "complexity_rationale": "Score 7: Base(1) + Novelty(+2, informer + workqueue без Manager) + Deps(+2, три зависимости) + Scope(+1, 2 файла + тесты на fake clientset) + Risk(+1, гонки и идемпотентность)",
+        "expected_diff_size": "medium",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "explicit",
+        "pruneable": false,
+        "prune_rationale": "Событийный informer с resync прямо зафиксирован решением #10 и закрывает AC-1, AC-12 и INV-6.",
+        "validation_criteria": [
+          "VC1 [AC-1]: под с cpu.azalio.net/tier: idle, добавленный в fake clientset, приводит к записи cpu.idle=1 в его pod-cgroup под t.TempDir() в пределах разумного таймаута ожидания теста; числовой SLA не утверждается (test_vc1_annotated_pod_gets_idle)",
+          "VC2 [AC-12]: аннотация добавлена update-событием на УЖЕ существующем поде -> тир применён; затем аннотация снята update-событием -> тир снят; реализация, подписанная только на Add, обязана провалить оба assert'а (test_vc2_live_pod_annotation_add_and_remove)",
+          "VC3 [INV-6]: второй проход реконсиляции по неизменившемуся поду даёт ноль вызовов writer'а, ноль Event'ов и ноль записей лога уровня Info; cpi_resync_drift_total остаётся 0 (test_vc3_reconcile_is_idempotent)",
+          "VC4: informer создаётся с fieldSelector spec.nodeName=<node> — проверяется на перехваченных ListOptions fake clientset (test_vc4_field_selector_scopes_to_node)"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "reconcile(unchanged_state) => writes == 0 AND events == 0 ALWAYS", "scope": "module", "source": "spec-invariant-INV-6"},
+          {"type": "precondition", "assertion": "informer ListOptions.FieldSelector == spec.nodeName=<node>", "scope": "module"},
+          {"type": "postcondition", "assertion": "UpdateFunc handler registered AND triggers reconcile WHEN annotations changed", "scope": "module"}
+        ],
+        "aag_contract": "agent.Reconciler -> Run(ctx) с informer(fieldSelector spec.nodeName, resync 60s) -> add/update/delete приводят состояние pod-cgroup в соответствие с аннотациями; повторный проход по неизменившемуся поду не производит ни записей, ни Event'ов",
+        "implementation_hint": "Использовать k8s.io/client-go/informers с NewFilteredSharedInformerFactory и workqueue.NewRateLimitingQueue; Manager из controller-runtime не поднимать (HC-4). Delete-событие обрабатывать как отсутствие пода: каталог, скорее всего, уже исчез, и это ErrCgroupGone, а не ошибка.",
+        "test_strategy": {
+          "unit": "internal/agent/reconciler_test.go::TestVC1AnnotatedPodGetsIdle, ::TestVC2LivePodAnnotationAddAndRemove, ::TestVC3ReconcileIsIdempotent, internal/agent/informer_test.go::TestVC4FieldSelectorScopesToNode",
+          "integration": "Fake clientset (k8s.io/client-go/kubernetes/fake) + дерево cgroup-фикстуры в t.TempDir(): полный путь событие -> запись без настоящего кластера",
+          "e2e": "AC-1 и AC-12 подтверждаются на настоящем кластере в kind e2e (ST-013)",
+          "scenario_dimensions": {
+            "happy_path": "Add пода с аннотацией -> cpu.idle=1; удаление аннотации -> cpu.idle=0 и вес восстановлен",
+            "error": "Ошибка применения возвращает под в очередь с backoff и не роняет цикл; под исчез между событием и записью -> тихий пропуск",
+            "edge_case": "Пересоздание пода (новый UID -> новый cgroup, тир применяется заново), resync без изменений, поток из N подов одновременно",
+            "security": "fieldSelector ограничивает watch подами своей ноды — поверхность API-сервера сведена к одному informer, как заявлено в Security Boundaries"
+          }
+        },
+        "affected_files": [
+          "internal/agent/informer.go",
+          "internal/agent/informer_test.go",
+          "internal/agent/reconciler.go",
+          "internal/agent/reconciler_test.go"
+        ],
+        "creates_files": [
+          "internal/agent/informer.go",
+          "internal/agent/informer_test.go",
+          "internal/agent/reconciler.go",
+          "internal/agent/reconciler_test.go"
+        ]
+      },
+      {
+        "id": "ST-010",
+        "title": "Собрать cmd/agent: поведение на непрошедшей гейт ноде, readiness и остановка без отката",
+        "description": "cmd/agent/main.go: порядок старта — разбор флагов, envgate.Check, поднятие HTTP-серверов метрик и health. Если гейт не пройден: процесс НЕ завершается и НЕ уходит в перезапуск, readiness отдаёт 503 с причиной, cpi_environment_gate_info{reason} выставлена, informer поднимается в режиме только-чтение и вешает Event EnvironmentUnsupported на каждый аннотированный под своей ноды, но applier не создаётся вовсе (INV-5). Если гейт пройден — запускается цикл из ST-009. Обработка SIGTERM/SIGINT: отмена контекста, ожидание завершения очереди, закрытие серверов — и ни одной записи в cgroup ни на одном пути завершения (INV-4). Никакого отката в shutdown-хуке.",
+        "dependencies": ["ST-003", "ST-005", "ST-009"],
+        "risk_level": "medium",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 6,
+        "complexity_rationale": "Score 6: Base(1) + Novelty(+1, режим деградации без перезапуска) + Deps(+2, три зависимости) + Scope(+1) + Risk(+1, проверка отсутствия записей на всех путях завершения)",
+        "expected_diff_size": "medium",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "AC-5, AC-6 и INV-4 — решения уровня процесса, проверяемые только в main; откат на SIGTERM превратил бы rolling update в инцидент по p99 прода.",
+        "validation_criteria": [
+          "VC1 [AC-6]: на фикстуре ноды с cgroup v1 процесс продолжает работать (не выходит и не перезапускается), readiness-эндпоинт отдаёт 503 с текстом причины cgroup_v1, cpi_environment_gate_info{reason=cgroup_v1} == 1, и на каждый аннотированный под ноды повешен ровно один Event EnvironmentUnsupported (test_vc1_v1_node_stays_not_ready)",
+          "VC2 [AC-5]: снимок дерева cgroup-фикстуры до и после полного цикла старт -> применение -> SIGTERM -> повторный старт показывает, что остановка не изменила ни байта, а повторный старт привёл состояние в соответствие с аннотациями (test_vc2_restart_converges_stop_changes_nothing)",
+          "VC3 [INV-4]: путь завершения не содержит вызовов applier — тест test_vc3_shutdown_writes_nothing прогоняет SIGTERM с журналирующим writer'ом и требует пустой журнал; дополнительно grep-тест подтверждает, что Revert не вызывается ни из одного defer/signal-хендлера в cmd/",
+          "VC4: readiness отдаёт 200 только после успешного гейта и первичной синхронизации кеша informer'а"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "shutdown path executes 0 cgroup writes ALWAYS (except --revert-all mode)", "scope": "module", "source": "spec-invariant-INV-4"},
+          {"type": "postcondition", "assertion": "process.running == true AND readiness == 503 WHEN gate.Ready == false", "scope": "module"},
+          {"type": "invariant", "assertion": "applier == nil WHEN gate.Ready == false", "scope": "module", "source": "spec-invariant-INV-5"}
+        ],
+        "aag_contract": "cmd/agent -> main() -> при пройденном гейте запускает Reconciler; при непройденном остаётся живым и not-ready с причиной, метрикой и Event'ами; на SIGTERM завершается, не изменив ни одного значения cgroup",
+        "implementation_hint": "Не завершать процесс с ненулевым кодом при отказе гейта: kubelet перезапустит контейнер и получится crashloop, который AC-6 запрещает. Applier конструировать только внутри ветки Ready — так INV-5 держится типом, а не дисциплиной.",
+        "test_strategy": {
+          "unit": "cmd/agent/main_test.go::TestVC1V1NodeStaysNotReady, ::TestVC3ShutdownWritesNothing, ::TestVC4ReadinessAfterCacheSync",
+          "integration": "internal/agent/lifecycle_test.go::TestVC2RestartConvergesStopChangesNothing — полный цикл поверх fake clientset и дерева в t.TempDir() с побайтовым снимком до/после",
+          "e2e": "AC-5 частично подтверждается в kind: удаление пода DaemonSet'а не меняет cpu.idle работающих подов (ST-013)",
+          "scenario_dimensions": {
+            "happy_path": "Пройденный гейт -> readiness 200, реконсиляция работает",
+            "error": "v1-нода -> 503 с причиной, живой процесс, Event'ы на аннотированных подах, ноль записей",
+            "edge_case": "SIGTERM во время обработки очереди; повторный старт после жёсткого завершения; гейт пройден, но kubepods ещё нет",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "cmd/agent/main.go",
+          "cmd/agent/main_test.go",
+          "internal/agent/lifecycle.go",
+          "internal/agent/lifecycle_test.go",
+          "internal/agent/health.go"
+        ],
+        "creates_files": [
+          "cmd/agent/main_test.go",
+          "internal/agent/lifecycle.go",
+          "internal/agent/lifecycle_test.go",
+          "internal/agent/health.go"
+        ]
+      },
+      {
+        "id": "ST-011",
+        "title": "Реализовать одноразовый режим --revert-all",
+        "description": "internal/agent/revertall.go: RunRevertAll(ctx, cfg) — одноразовый проход, не поднимающий ни informer, ни сервер метрик. Список подов ноды берётся одним List с fieldSelector spec.nodeName; для каждого пода с любым из двух тиров вызывается Applier.Revert в порядке из ST-008. Итог печатается таблицей (под / что снято / результат). Процесс завершается кодом 0, если все откаты успешны или откатывать было нечего, и ненулевым кодом, если хотя бы один откат завершился ошибкой (ErrCgroupGone ошибкой не считается). cmd/agent/main.go маршрутизирует флаг --revert-all в этот путь до запуска обычного цикла.",
+        "dependencies": ["ST-008", "ST-010"],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 4,
+        "complexity_rationale": "Score 4: Base(1) + Novelty(+0, переиспользует Revert) + Deps(+1, две зависимости) + Scope(+1) + Risk(+1, семантика кода возврата при частичном успехе)",
+        "expected_diff_size": "small",
+        "concern_type": "runtime",
+        "one_logical_step": true,
+        "requiredness": "explicit",
+        "pruneable": false,
+        "prune_rationale": "AC-7 — приёмочный критерий; этот режим и есть единственное разрешённое исключение из INV-4.",
+        "validation_criteria": [
+          "VC1 [AC-7]: на фикстуре ноды с тремя подами (только idle, только burst, оба) запуск с --revert-all снимает оба тира со всех, восстанавливает веса из текущих spec и завершается кодом 0 (test_vc1_revert_all_clears_node_exit_zero)",
+          "VC2: при ошибке отката хотя бы одного пода код возврата ненулевой, а остальные поды всё равно обработаны — режим не останавливается на первой ошибке (test_vc2_partial_failure_nonzero_exit)",
+          "VC3: --revert-all не поднимает informer и сервер метрик — тест проверяет, что порт метрик свободен и watch к fake clientset не открывался (test_vc3_revert_all_is_oneshot)"
+        ],
+        "contracts": [
+          {"type": "postcondition", "assertion": "exit_code == 0 WHEN all reverts succeeded OR nothing to revert", "scope": "module"},
+          {"type": "postcondition", "assertion": "exit_code != 0 WHEN any revert failed with error other than ErrCgroupGone", "scope": "module"}
+        ],
+        "aag_contract": "agent -> RunRevertAll(ctx, cfg) -> снимает cpu.idle и cpu.max.burst со всех подов ноды в порядке INV-2/INV-7, восстанавливает веса, печатает таблицу результатов и выходит с кодом 0 при полном успехе",
+        "implementation_hint": "Единственный List, без watch: режим по определению одноразовый. Переиспользовать Applier.Revert целиком, не дублируя порядок операций — иначе INV-2 придётся поддерживать в двух местах.",
+        "test_strategy": {
+          "unit": "internal/agent/revertall_test.go::TestVC1RevertAllClearsNode, ::TestVC2PartialFailureNonzeroExit, ::TestVC3RevertAllIsOneshot",
+          "integration": "Fake clientset + дерево фикстуры в t.TempDir()",
+          "e2e": "N/A (не входит в блокирующий гейт; проверяется вручную на стенде)",
+          "scenario_dimensions": {
+            "happy_path": "Три пода с разными тирами -> всё снято, exit 0",
+            "error": "EINVAL на одном поде -> остальные обработаны, exit != 0",
+            "edge_case": "Нода без аннотированных подов -> exit 0 и пустая таблица; под удалён во время прохода -> ErrCgroupGone не влияет на код возврата",
+            "security": "N/A"
+          }
+        },
+        "affected_files": [
+          "internal/agent/revertall.go",
+          "internal/agent/revertall_test.go",
+          "cmd/agent/main.go"
+        ],
+        "creates_files": [
+          "internal/agent/revertall.go",
+          "internal/agent/revertall_test.go"
+        ]
+      },
+      {
+        "id": "ST-012",
+        "title": "Добавить kustomize-манифесты DaemonSet и RBAC без privileged и SYS_ADMIN",
+        "description": "config/base/: daemonset.yaml (образ, hostPath /sys/fs/cgroup на rw, runAsUser 0, allowPrivilegeEscalation false, capabilities drop ALL, readOnlyRootFilesystem true, hostNetwork/hostPID/hostIPC false, NODE_NAME из fieldRef spec.nodeName, readiness и liveness на health-порт), rbac.yaml (ServiceAccount + ClusterRole: get/list/watch на pods, create/patch на events; больше ничего), namespace.yaml, kustomization.yaml. config/samples/: пример пода с tier: idle, пример с burst, пример с обоими. Dockerfile — distroless-образ с одним статическим бинарём. Makefile-цели build, docker-build, deploy.",
+        "dependencies": ["ST-010"],
+        "risk_level": "medium",
+        "risks": [],
+        "security_critical": true,
+        "complexity_score": 5,
+        "complexity_rationale": "Score 5: Base(1) + Novelty(+1, kustomize-структура с нуля) + Deps(+1) + Scope(+2, 8 файлов YAML/Docker/Make) + Risk(+0, требования к securityContext измерены на стенде)",
+        "expected_diff_size": "medium",
+        "concern_type": "infra",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "HC-6 — hard constraint, а отрендеренный YAML бывает неверен даже при корректном коде; поставка DaemonSet прямо зафиксирована решением #4.",
+        "validation_criteria": [
+          "VC1 [HC-6]: kustomize build config/base не содержит ни privileged: true, ни SYS_ADMIN; присутствуют runAsUser: 0, capabilities.drop: [ALL], allowPrivilegeEscalation: false и hostPath /sys/fs/cgroup с readOnly: false — проверяется скриптом hack/check-manifests.sh в CI (test_vc1_no_privileged_no_sysadmin)",
+          "VC2: ClusterRole даёт ровно get/list/watch на pods и create/patch на events; любой лишний ресурс или глагол ловится тем же скриптом (test_vc2_rbac_is_minimal)",
+          "VC3: kustomize build config/base | kubectl apply --dry-run=client -f - проходит без ошибок, и все три примера из config/samples валидны (test_vc3_manifests_apply_dry_run)"
+        ],
+        "contracts": [
+          {"type": "invariant", "assertion": "rendered DaemonSet contains no 'privileged: true' and no 'SYS_ADMIN' ALWAYS", "scope": "module", "source": "spec-hard-constraint-HC-6"},
+          {"type": "invariant", "assertion": "ClusterRole verbs subset of {get,list,watch on pods, create,patch on events}", "scope": "module"}
+        ],
+        "aag_contract": "config/base kustomization -> kustomize build -> DaemonSet с hostPath /sys/fs/cgroup rw и uid 0, без privileged и SYS_ADMIN, плюс RBAC ровно на чтение подов и создание событий; kubectl apply --dry-run проходит",
+        "implementation_hint": "SYS_ADMIN не добавлять: на стенде под с drop ALL и uid 0 успешно записал чужой pod-cgroup, догадка исследования опровергнута. В комментарии к манифесту прямо назвать, что hostPath rw — это де-факто право писать cgroup любого пода ноды (та же формулировка пойдёт в README).",
+        "test_strategy": {
+          "unit": "N/A (YAML); статическая проверка вынесена в hack/check-manifests.sh",
+          "integration": "hack/check-manifests.sh: kustomize build + grep-гейты по HC-6 и RBAC + kubectl apply --dry-run=client",
+          "e2e": "Применение манифестов в kind — часть ST-013 (дешёвая защита от рассинхрона кода и YAML)",
+          "scenario_dimensions": {
+            "happy_path": "kustomize build рендерит DaemonSet и RBAC, dry-run проходит",
+            "error": "Добавление privileged: true в манифест роняет hack/check-manifests.sh — негативный кейс проверяется на временной копии",
+            "edge_case": "Overlay для kind (образ с локальным тегом, imagePullPolicy: Never)",
+            "security": "HC-6 + минимальный RBAC — оба гейта автоматические, формулировка про фактические привилегии дублируется в README (ST-015)"
+          }
+        },
+        "affected_files": [
+          "config/base/daemonset.yaml",
+          "config/base/rbac.yaml",
+          "config/base/namespace.yaml",
+          "config/base/kustomization.yaml",
+          "config/samples/pod-idle.yaml",
+          "config/samples/pod-burst.yaml",
+          "config/samples/pod-both.yaml",
+          "Dockerfile",
+          "Makefile",
+          "hack/check-manifests.sh"
+        ],
+        "creates_files": [
+          "config/base/daemonset.yaml",
+          "config/base/rbac.yaml",
+          "config/base/namespace.yaml",
+          "config/base/kustomization.yaml",
+          "config/samples/pod-idle.yaml",
+          "config/samples/pod-burst.yaml",
+          "config/samples/pod-both.yaml",
+          "Dockerfile",
+          "Makefile",
+          "hack/check-manifests.sh"
+        ],
+        "split_rationale": "10 файлов, но это один логический артефакт поставки: манифест, его RBAC, его образ и его гейт проверяются одной командой kustomize build и разваливаются по отдельности."
+      },
+      {
+        "id": "ST-013",
+        "title": "Добавить kind e2e-гейт и CI-workflow (provisional: зависит от Open Question 1)",
+        "description": "ПЕРВЫМ ШАГОМ — pre-flight test/e2e/preflight_test.go: поднять kind, создать под, сравнить путь pod-cgroup, который вычисляет агент внутри контейнера-ноды, с путём, который видит kubelet этой ноды. При расхождении тест падает с явным текстом и зафиксированной причиной, а e2e-гейт заменяется одноузловой нодой в CI (решение фиксируется в README и в этом файле). Далее test/e2e/e2e_test.go: kind-кластер (kind-config.yaml с extraMounts для /sys/fs/cgroup, если pre-flight покажет, что это нужно), сборка образа и загрузка в kind, применение config/base, создание пода с tier: idle, чтение фактического cpu.idle из pod-cgroup внутри ноды, удаление аннотации, чтение cpu.idle=0 и request-derived веса. .github/workflows/ci.yaml: джобы go vet, линтер, unit, hack/check-manifests.sh и e2e — всё блокирует merge; раннер проверяется на cgroup v2 явно, а не предполагается.",
+        "dependencies": ["ST-012"],
+        "risk_level": "high",
+        "risks": [
+          "Open Question 1: согласованность cgroup-вида внутри kind-ноды не проверена. Kind-нода — контейнер со своей cgroup-веткой и, возможно, своим cgroup namespace. Если вид не согласован, весь блокирующий e2e-гейт не существует и заменяется одноузловой нодой в CI.",
+          "Рекомендация про extraMounts для /sys/fs/cgroup взята из исследования и тоже не проверена — принимать её на веру нельзя.",
+          "Раннер CI обязан быть на cgroup v2; актуальные ubuntu-образы это дают, но предположение должно быть проверено явным шагом, иначе e2e будет падать по причине, не связанной с кодом.",
+          "cpu.max.burst может быть недоступен на ядре раннера — тогда burst-часть e2e деградирует до skip с явной причиной, а не до молчаливого прохода."
+        ],
+        "security_critical": false,
+        "complexity_score": 8,
+        "complexity_rationale": "Score 8: Base(1) + Novelty(+3, согласованность cgroup-вида в kind не проверена ни разу) + Deps(+1) + Scope(+2, e2e + CI + kind-конфиг) + Risk(+1, зависимость от окружения раннера) — итог ограничен 8",
+        "expected_diff_size": "medium",
+        "concern_type": "tests",
+        "one_logical_step": true,
+        "requiredness": "implied_by_acceptance",
+        "pruneable": false,
+        "prune_rationale": "AC-10 — приёмочный критерий и блокирующий merge гейт по решению #11; provisional относится к выбору kind как площадки, а не к необходимости e2e.",
+        "provisional": true,
+        "validation_criteria": [
+          "VC1 [AC-10]: в kind развёрнутый DaemonSet применяет tier: idle к аннотированному поду — тест читает фактическое значение cpu.idle из pod-cgroup внутри ноды (kubectl exec / docker exec, не из логов агента) и получает 1; после удаления аннотации читает 0 и восстановленный request-derived вес (test_vc1_kind_apply_and_revert)",
+          "VC2: pre-flight сравнивает путь, вычисленный агентом, с путём, который реально существует в ноде kind, и при расхождении падает с текстом, называющим Open Question 1; результат прогона фиксируется в README как ответ на вопрос (test_vc2_kind_cgroup_view_consistency)",
+          "VC3: CI-workflow блокирует merge на go vet, линтере, unit-тестах, hack/check-manifests.sh и e2e; отдельный шаг проверяет, что раннер на cgroup v2, и падает с явной причиной, если нет"
+        ],
+        "contracts": [
+          {"type": "precondition", "assertion": "agent-computed pod-cgroup path EXISTS inside kind node BEFORE e2e assertions run", "scope": "module"},
+          {"type": "postcondition", "assertion": "cpu.idle == 1 read from real pod-cgroup AFTER annotation applied", "scope": "module"}
+        ],
+        "aag_contract": "test/e2e -> kind up + kustomize apply + annotated pod -> фактическое значение cpu.idle в pod-cgroup ноды равно 1, после снятия аннотации равно 0 с восстановленным весом; pre-flight сначала доказывает, что агент и kubelet видят один и тот же путь",
+        "implementation_hint": "Порядок обязателен: сначала pre-flight (это первый пункт к исполнению по T-012), только потом писать сам сценарий. Если pre-flight не сойдётся — не чинить kind героическими средствами, а зафиксировать причину и перевести гейт на одноузловую ноду, как предписывает решение.",
+        "test_strategy": {
+          "unit": "N/A — уровень по определению кластерный",
+          "integration": "hack/check-manifests.sh уже покрывает рендер; здесь проверяется применение манифестов в живом kind",
+          "e2e": "test/e2e/preflight_test.go::TestVC2KindCgroupViewConsistency, test/e2e/e2e_test.go::TestVC1KindApplyAndRevert (тег build e2e, запуск make e2e)",
+          "scenario_dimensions": {
+            "happy_path": "Аннотированный под получает cpu.idle=1, снятие аннотации возвращает 0 и вес",
+            "error": "Расхождение cgroup-вида в kind даёт падение с явной причиной, а не flaky-тест; недоступный cpu.max.burst даёт skip с причиной, а не молчаливый проход",
+            "edge_case": "Аннотация добавлена на уже живом поде (перекрёстная проверка AC-12 на настоящем кластере)",
+            "security": "Проверяется, что DaemonSet в kind стартует без privileged и SYS_ADMIN — то есть HC-6 держится не только на бумаге"
+          }
+        },
+        "affected_files": [
+          "test/e2e/e2e_test.go",
+          "test/e2e/preflight_test.go",
+          "test/e2e/kind-config.yaml",
+          "test/e2e/helpers.go",
+          ".github/workflows/ci.yaml",
+          "Makefile"
+        ],
+        "creates_files": [
+          "test/e2e/e2e_test.go",
+          "test/e2e/preflight_test.go",
+          "test/e2e/kind-config.yaml",
+          "test/e2e/helpers.go",
+          ".github/workflows/ci.yaml"
+        ]
+      },
+      {
+        "id": "ST-014",
+        "title": "Написать hack/stand-probe.sh: таблица четырёх ядерных фактов с ненулевым кодом при расхождении",
+        "description": "hack/stand-probe.sh — самодостаточный shell-скрипт для настоящей ноды с kubelet. Создаёт namespace и подопытный под (Burstable, requests.cpu 500m, без limits, аннотация tier: idle), вычисляет путь pod-cgroup и проверяет четыре факта: (1) cpu.idle=1 переживает systemctl restart kubelet; (2) переживает 60-секундный цикл qosContainerManager.UpdateCgroups и создание соседнего пода; (3) запись cpu.weight при cpu.idle=1 даёт EINVAL; (4) переход cpu.idle 1->0 оставляет вес 100, а не request-derived. Плюс пятая проверка на Unverified Runtime Assumption: поведение комбинации обоих тиров на настоящем pod-cgroup под управлением kubelet. Вывод — таблица проверка / ожидалось / получилось; ненулевой код возврата при любом расхождении; уборка namespace в trap.",
+        "dependencies": [],
+        "risk_level": "medium",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 5,
+        "complexity_rationale": "Score 5: Base(1) + Novelty(+1, ожидание рестарта kubelet и 120-секундных окон в shell) + Deps(+0, зависимостей нет) + Scope(+1, один скрипт) + Risk(+2, скрипт не может быть проверен в CI и обязан быть надёжным с первого раза на чужой ноде)",
+        "expected_diff_size": "medium",
+        "concern_type": "tests",
+        "one_logical_step": true,
+        "requiredness": "explicit",
+        "pruneable": false,
+        "prune_rationale": "AC-9 — приёмочный критерий и одновременно тот воспроизводимый артефакт, ради которого репозиторий публикуется к докладу.",
+        "validation_criteria": [
+          "VC1 [AC-9]: скрипт печатает таблицу со столбцами проверка / ожидалось / получилось по всем четырём фактам и возвращает ненулевой код, если хотя бы одна строка разошлась; вручную проверяется подменой ожидаемого значения — код возврата обязан стать ненулевым",
+          "VC2: пятая строка таблицы покрывает Unverified Runtime Assumption — комбинацию обоих тиров на живом pod-cgroup под управлением kubelet (рестарт и цикл реконсиляции)",
+          "VC3: shellcheck проходит без предупреждений; на ноде без kubelet или без cgroup v2 скрипт отказывается работать с внятным сообщением, а не падает на середине; trap удаляет созданный namespace на любом выходе"
+        ],
+        "contracts": [
+          {"type": "postcondition", "assertion": "exit_code != 0 WHEN any observed value != expected value", "scope": "module"},
+          {"type": "invariant", "assertion": "created namespace removed on any exit path (trap EXIT) ALWAYS", "scope": "module"}
+        ],
+        "aag_contract": "hack/stand-probe.sh -> запуск на ноде с настоящим kubelet -> таблица проверка/ожидалось/получилось по четырём ядерным фактам плюс комбинации тиров; ненулевой код при любом расхождении, namespace убран",
+        "implementation_hint": "Команды воспроизведения уже сняты на стенде (T-005, раздел Команды для воспроизведения) — брать их дословно, включая построение пути через ${UID//-/_}. Merge скрипт не блокирует: стенд не обязан быть живым, чтобы принять PR с правкой README.",
+        "test_strategy": {
+          "unit": "shellcheck hack/stand-probe.sh в CI + smoke-запуск с --dry-run на раннере (печатает план проверок, ничего не создаёт)",
+          "integration": "N/A",
+          "e2e": "Ручной и ночной прогон на стенде (нода с настоящим kubelet); merge не блокирует",
+          "scenario_dimensions": {
+            "happy_path": "Все пять строк совпали -> таблица и код 0",
+            "error": "Расхождение хотя бы в одной строке -> ненулевой код и подсветка строки; отсутствие kubectl/sudo -> внятный отказ",
+            "edge_case": "Нода без cgroup v2, нода с cgroupfs-драйвером (скрипт сообщает, что ветка не покрыта), прерывание по Ctrl-C с уборкой namespace",
+            "security": "Скрипт пишет только в cgroup подопытного пода, созданного им самим, и удаляет его за собой"
+          }
+        },
+        "affected_files": [
+          "hack/stand-probe.sh",
+          "hack/fixtures/probe-pod.yaml"
+        ],
+        "creates_files": [
+          "hack/stand-probe.sh",
+          "hack/fixtures/probe-pod.yaml"
+        ]
+      },
+      {
+        "id": "ST-015",
+        "title": "Написать README: рамка Maximum / Yield / Progress, матрица supported, предупреждение про VPA",
+        "description": "README.md: описание обоих тиров через рамку Maximum / Yield / Progress (cpu.max.burst расширяет Maximum, cpu.idle отдаёт Yield, оба не увеличивают Progress за счёт соседа); матрица supported окружений (cgroup v2 unified, ядро 5.15+, драйвер systemd — supported; cgroupfs — experimental и не покрыт ни e2e, ни стендом; cgroup v1 и hybrid — не поддерживаются); явное предупреждение, что оба тира исключают под из VPA (измерено: любая запись cpu.weight при cpu.idle=1 даёт EINVAL, а это ровно путь in-place resize); раздел безопасности, называющий hostPath /sys/fs/cgroup на запись под uid 0 своим именем — де-факто право писать cgroup любого пода ноды, без формулировки про минимальные привилегии; раздел Non-goals из Out of Scope, включая отсутствие любых заявлений про эффект на p99 и про экономию нод; ссылка на hack/stand-probe.sh как на способ воспроизвести четыре факта одной командой. Числовой SLA задержки применения не упоминается нигде.",
+        "dependencies": ["ST-001", "ST-012"],
+        "risk_level": "low",
+        "risks": [],
+        "security_critical": false,
+        "complexity_score": 3,
+        "complexity_rationale": "Score 3: Base(1) + Novelty(+0) + Deps(+1, две зависимости) + Scope(+1, один большой документ) + Risk(+0, содержание продиктовано спекой)",
+        "expected_diff_size": "medium",
+        "concern_type": "docs",
+        "one_logical_step": true,
+        "requiredness": "explicit",
+        "pruneable": false,
+        "prune_rationale": "AC-11 — приёмочный критерий; репозиторий публичный и идёт к докладу, README здесь не украшение, а часть поставки.",
+        "validation_criteria": [
+          "VC1 [AC-11]: README объясняет оба тира через рамку Maximum / Yield / Progress, содержит матрицу supported окружений и явное предупреждение об исключении обоих тиров из VPA. Критерий закрывается ревью человека, а не грепом: пункт вносится в чеклист PR как ручная проверка, потому что грепом ключевых слов легко пройти с неверным объяснением",
+          "VC2: ключи аннотаций в README совпадают с константами из internal/annotations/keys.go — проверяется скриптом hack/check-readme-keys.sh в CI (автоматическая часть, дополняющая ручное ревью)",
+          "VC3: README не содержит ни одного числового порога задержки применения тира и ни одного утверждения об эффекте cpu.max.burst на p99 — обе величины не измерены; проверяется тем же скриптом по списку запрещённых формулировок"
+        ],
+        "contracts": [],
+        "aag_contract": "README.md -> описывает тиры через Maximum/Yield/Progress, матрицу supported и исключение из VPA -> человек на ревью подтверждает объяснение по существу; hack/check-readme-keys.sh дополнительно сверяет ключи аннотаций с константами и ловит незамеренные утверждения",
+        "implementation_hint": "Формулировку про привилегии брать из раздела Security Boundaries спеки дословно по смыслу: измерение показало, что контейнер с отброшенными capabilities записал чужой pod-cgroup, и прятать это за минимальными привилегиями было бы враньём.",
+        "test_strategy": {
+          "unit": "hack/check-readme-keys.sh — сверка ключей аннотаций с константами и проверка отсутствия запрещённых утверждений (числовой SLA, эффект на p99)",
+          "integration": "N/A",
+          "e2e": "N/A",
+          "scenario_dimensions": {
+            "happy_path": "README проходит ручное ревью и автоматическую сверку ключей",
+            "error": "Расхождение ключа в README с константой роняет CI",
+            "edge_case": "Появление в README числа секунд рядом со словом задержка ловится списком запрещённых формулировок",
+            "security": "Раздел безопасности обязан присутствовать и называть hostPath rw + uid 0 своим именем — отдельный пункт ручного чеклиста"
+          }
+        },
+        "affected_files": [
+          "README.md",
+          "hack/check-readme-keys.sh"
+        ],
+        "creates_files": [
+          "README.md",
+          "hack/check-readme-keys.sh"
+        ]
+      }
+    ]
+  }
+}
