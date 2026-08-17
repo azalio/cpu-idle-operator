@@ -785,3 +785,250 @@ pollLoop:
 	default:
 	}
 }
+
+// tierApplyReasonTotal sums cpi_tier_apply_total's counter value across
+// every series carrying label reason=wantReason, regardless of its other
+// labels (node/namespace/qos_class/result do not vary within one test's
+// single pod).
+func tierApplyReasonTotal(t *testing.T, families []*dto.MetricFamily, wantReason string) float64 {
+	t.Helper()
+	var total float64
+	for _, family := range families {
+		if family.GetName() != "cpi_tier_apply_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "reason" && label.GetValue() == wantReason {
+					total += metric.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return total
+}
+
+// drainEvents drains every currently-buffered message off events without
+// blocking, returning how many there were. It exists so a test can assert
+// an exact count of Events fired across several Reconcile passes instead of
+// only "at least one", which is what the deployed defect this file's
+// TestPodNoteDeduplication guards against actually got wrong: the Event
+// fired, correctly, on every single pass rather than only when something
+// about the pod changed.
+func drainEvents(events <-chan string) int {
+	count := 0
+	for {
+		select {
+		case <-events:
+			count++
+		default:
+			return count
+		}
+	}
+}
+
+// TestPodNoteDeduplication covers the fix for the defect a live-cluster
+// deployment surfaced: a pod carrying a tier.Note (AC-4's burst-without-
+// limits.cpu case here) that Reconcile's own plan has nothing to write for
+// used to route through Applier.Apply -- and so re-fire its Event and
+// increment cpi_tier_apply_total -- on every single reconcile pass,
+// including every ~60s resync, even though nothing about the pod ever
+// changed (measured on a stand as cpi_tier_apply_total{reason=
+// "limits_cpu_missing",result="inactive"} climbing 7->8 in one resync
+// interval with a growing TierInactive Event count on kubectl get events).
+// The fix tracks each pod's last-reported Note set in the Reconciler
+// (Reconciler.lastNotes) and only lets a pass reach Apply for a Note alone
+// when that set has actually changed since the last pass that reported it.
+func TestPodNoteDeduplication(t *testing.T) {
+	// Intent: shared fixture across every subtest below -- a Burstable pod
+	// with the burst annotation but no CPU limit (Requests only), whose
+	// cgroup is already seeded at the fully-cleared state BuildPlan
+	// converges toward for this shape. tier.Desired reports exactly one
+	// Note (NoteNoCPULimit / AC-4's TierInactive) for it, and its plan is
+	// empty on every pass regardless of the annotation's presence -- see
+	// TestSeamNotesReachUserThroughReconciler's own fixture, which this
+	// mirrors -- so every subtest below exercises the "nothing to write,
+	// something to say" seam the fix targets, never a real cgroup write.
+	newBurstWithoutLimitPod := func(uid string) *corev1.Pod {
+		pod := testPod(uid, "", map[string]string{annotations.BurstKey: ""})
+		pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+			corev1.ResourceCPU: resource.MustParse("500m"),
+		}
+		return pod
+	}
+
+	t.Run("three_unchanged_passes_fire_exactly_once", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "77777777-1111-1111-1111-111111111111"
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+			"0", "1", "max 100000", "0")
+
+		pod := newBurstWithoutLimitPod(uid)
+
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		lister := corelisters.NewPodLister(indexer)
+
+		registry := prometheus.NewRegistry()
+		fakeRecorder := record.NewFakeRecorder(10)
+		recorder := observe.NewRecorder(registry, fakeRecorder, "node-a")
+		events := observe.NewEventRecorder(fakeRecorder)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
+		metrics := observe.NewMetrics(prometheus.NewRegistry())
+		reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+
+		// Three passes over a pod whose annotations and cgroup state never
+		// change, standing in for three ~60s resync ticks -- resync=true
+		// on every pass, matching the informer's own periodic full resync
+		// that surfaced this defect in production.
+		for i := 0; i < 3; i++ {
+			if err := reconciler.Reconcile(context.Background(), key, true); err != nil {
+				t.Fatalf("Reconcile() pass %d error = %v", i+1, err)
+			}
+		}
+
+		if got := drainEvents(fakeRecorder.Events); got != 1 {
+			t.Fatalf("event count across 3 unchanged passes = %d, want exactly 1: an unchanged Note must not re-fire on every resync pass", got)
+		}
+
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatalf("Gather() error = %v", err)
+		}
+		if got := tierApplyReasonTotal(t, families, string(observe.TierApplyReasonLimitsCPUMissing)); got != 1 {
+			t.Fatalf(`cpi_tier_apply_total{reason=%q} = %v, want 1: an unchanged Note must not increment the counter on every resync pass`, observe.TierApplyReasonLimitsCPUMissing, got)
+		}
+	})
+
+	t.Run("note_disappearing_then_reappearing_fires_again", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "77777777-2222-2222-2222-222222222222"
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+			"0", "1", "max 100000", "0")
+
+		pod := newBurstWithoutLimitPod(uid)
+
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		lister := corelisters.NewPodLister(indexer)
+
+		fakeRecorder := record.NewFakeRecorder(10)
+		recorder := observe.NewRecorder(prometheus.NewRegistry(), fakeRecorder, "node-a")
+		events := observe.NewEventRecorder(fakeRecorder)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
+		metrics := observe.NewMetrics(prometheus.NewRegistry())
+		reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+
+		// Pass 1: the Note first appears -- fires.
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() pass 1 error = %v", err)
+		}
+
+		// Pass 2: the burst annotation is removed entirely (standing in for
+		// the user adding limits.cpu -- both collapse the pod to "no Note,
+		// nothing to write" the same way). The Note disappears, so this
+		// pass must stay silent.
+		fixed := pod.DeepCopy()
+		fixed.Annotations = nil
+		if err := indexer.Update(fixed); err != nil {
+			t.Fatalf("indexer.Update (remove annotation): %v", err)
+		}
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() pass 2 error = %v", err)
+		}
+
+		// Pass 3: the annotation comes back with the CPU limit still
+		// missing -- the same Note reappears and must fire again, not stay
+		// suppressed by pass 1's now-stale record (podNoteChanged deleted
+		// that record when pass 2 observed zero notes).
+		if err := indexer.Update(pod); err != nil {
+			t.Fatalf("indexer.Update (restore annotation): %v", err)
+		}
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() pass 3 error = %v", err)
+		}
+
+		gotEvents := make([]string, 0, 2)
+	drainLoop:
+		for {
+			select {
+			case got := <-fakeRecorder.Events:
+				gotEvents = append(gotEvents, got)
+			default:
+				break drainLoop
+			}
+		}
+		if len(gotEvents) != 2 {
+			t.Fatalf("event count across appear/disappear/reappear = %d %v, want exactly 2 (one per appearance)", len(gotEvents), gotEvents)
+		}
+		for _, got := range gotEvents {
+			if !strings.Contains(got, string(observe.ReasonTierInactive)) {
+				t.Errorf("event = %q, want it to carry reason %q", got, observe.ReasonTierInactive)
+			}
+		}
+	})
+
+	t.Run("note_state_is_pruned_when_pod_leaves_cache", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "77777777-3333-3333-3333-333333333333"
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+			"0", "1", "max 100000", "0")
+
+		pod := newBurstWithoutLimitPod(uid)
+
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		lister := corelisters.NewPodLister(indexer)
+
+		fakeRecorder := record.NewFakeRecorder(10)
+		recorder := observe.NewRecorder(prometheus.NewRegistry(), fakeRecorder, "node-a")
+		events := observe.NewEventRecorder(fakeRecorder)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
+		metrics := observe.NewMetrics(prometheus.NewRegistry())
+		reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+		if got := len(reconciler.lastNotes); got != 1 {
+			t.Fatalf("len(lastNotes) after first pass = %d, want 1: the pod's Note must be tracked", got)
+		}
+
+		if err := indexer.Delete(pod); err != nil {
+			t.Fatalf("indexer.Delete: %v", err)
+		}
+		// A second pass with an unrelated key -- refreshPodsInTier runs
+		// unconditionally at the top of Reconcile and lists the full cache
+		// regardless of which key triggered the pass, exactly like
+		// TestPodsInTierReflectsFullNodeState relies on for the analogous
+		// podsInTierLabels leak guard.
+		if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
+			t.Fatalf("Reconcile() second pass error = %v", err)
+		}
+
+		if got := len(reconciler.lastNotes); got != 0 {
+			t.Fatalf("len(lastNotes) after pod left the cache = %d, want 0: a departed pod's note-tracking entry must not leak", got)
+		}
+	})
+}
