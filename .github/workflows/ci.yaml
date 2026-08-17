@@ -35,14 +35,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v8
         with:
-          # "latest" rather than a pin: golangci-lint's own Go-version
-          # floor moves forward with every release, and this module's
-          # go.mod (see go.mod's `go` directive) needs a build of
-          # golangci-lint no older than that -- pinning an old version here
-          # would fail this job for a reason that has nothing to do with
-          # this repository's code.
+          # The action's major version pins the golangci-lint major line, so
+          # `version: latest` alone is not enough: action@v6 resolves to the
+          # v1 line, whose newest release (v1.64.8) is built with go1.24 and
+          # refuses a module targeting go 1.26 with
+          #   "the Go language version used to build golangci-lint is lower
+          #    than the targeted Go version".
+          # action@v8 installs the v2 line, built with a current Go.
           version: latest
           args: --build-tags=e2e
 
