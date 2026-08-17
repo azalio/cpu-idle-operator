@@ -1,0 +1,57 @@
+# Подопытные поды для hack/stand-probe.sh.
+#
+# Плейсхолдеры __NAMESPACE__ и __NODE__ подставляет сам скрипт.
+# Оба пода Burstable с requests.cpu 500m — это ровно та конфигурация, на которой
+# сняты эталонные значения (cpu.weight = 20), см. AC-2 и AC-9 в спеке.
+#
+# probe-idle  — без limits: цель для cpu.idle.
+# probe-burst — с limits: цель для комбинации обоих тиров, потому что
+#               cpu.max.burst без выставленной квоты неактивен.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-idle
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: cpi-idle-operator-probe
+  annotations:
+    cpu.azalio.net/tier: idle
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: bg
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do :; done"]
+      resources:
+        requests:
+          cpu: 500m
+          memory: 32Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-burst
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: cpi-idle-operator-probe
+  annotations:
+    cpu.azalio.net/tier: idle
+    cpu.azalio.net/burst: "true"
+spec:
+  nodeName: __NODE__
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: bg
+      image: busybox:1.36
+      command: ["sh", "-c", "while true; do :; done"]
+      resources:
+        requests:
+          cpu: 500m
+          memory: 32Mi
+        limits:
+          cpu: "1"
+          memory: 64Mi
