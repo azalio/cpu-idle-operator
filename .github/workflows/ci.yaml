@@ -79,7 +79,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
         with:
-          version: latest
+          # Pinned, not "latest": the render this job diffs against is
+          # produced by Helm itself, so an unpinned Helm turns any upstream
+          # formatting change into a red build with no code change behind it.
+          # `make manifests` normalizes whitespace so a version bump is
+          # survivable, but pinning keeps the failure mode "someone edited the
+          # chart" rather than "GitHub rolled a new Helm".
+          version: v4.1.1
       # config/base is generated from deploy/helm/cpi-idle-operator, not
       # hand-maintained in parallel (see the "manifests" Makefile target).
       # This re-renders it and fails if the committed config/base doesn't

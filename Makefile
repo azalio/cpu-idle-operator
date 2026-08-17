@@ -34,14 +34,29 @@ deploy:
 # manifests renders config/base from the Helm chart. Run this after editing
 # anything under deploy/helm/cpi-idle-operator and commit the result --
 # config/base itself must never be hand-edited, see check-manifests-drift.
+#
+# The render is normalized before it is written: different Helm versions place
+# blank lines around the "---" document separator differently, and without
+# normalization check-manifests-drift fails purely because the CI runner's Helm
+# is not byte-for-byte the developer's. Normalization = drop the "# Source:"
+# comments, drop a leading separator, collapse runs of blank lines into one,
+# and strip trailing blank lines. Whitespace-only differences carry no meaning
+# in these manifests, so making the gate blind to them is correct, not a
+# loosening: it still fails on any change to an actual key or value.
+define render_template
+	helm template $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --show-only templates/$(1) \
+		| grep -v '^# Source:' \
+		| awk 'NR==1 && /^---$$/{next} {print}' \
+		| cat -s \
+		| awk '{lines[NR]=$$0} END{last=NR; while (last>0 && lines[last] ~ /^[[:space:]]*$$/) last--; for(i=1;i<=last;i++) print lines[i]}' \
+		> $(CONFIG_BASE)/$(1)
+endef
+
 .PHONY: manifests
 manifests:
-	helm template $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --show-only templates/namespace.yaml \
-		| grep -v '^# Source:' | awk 'NR==1 && /^---$$/{next} {print}' > $(CONFIG_BASE)/namespace.yaml
-	helm template $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --show-only templates/rbac.yaml \
-		| grep -v '^# Source:' | awk 'NR==1 && /^---$$/{next} {print}' > $(CONFIG_BASE)/rbac.yaml
-	helm template $(HELM_RELEASE) $(HELM_CHART) --namespace $(HELM_NAMESPACE) --show-only templates/daemonset.yaml \
-		| grep -v '^# Source:' | awk 'NR==1 && /^---$$/{next} {print}' > $(CONFIG_BASE)/daemonset.yaml
+	$(call render_template,namespace.yaml)
+	$(call render_template,rbac.yaml)
+	$(call render_template,daemonset.yaml)
 
 # check-manifests-drift fails if config/base no longer matches a fresh
 # render of the Helm chart -- the two must never be allowed to diverge
