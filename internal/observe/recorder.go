@@ -23,14 +23,38 @@ type Recorder struct {
 	node    string
 }
 
-// NewRecorder builds a Recorder that reports as node, registering its
-// metrics on registry and recording Events through eventRecorder.
+// NewRecorder builds a Recorder that reports as node, registering a fresh
+// Metrics bundle on registry and recording Events through eventRecorder.
+// Callers that already have a Metrics bundle registered elsewhere (e.g. a
+// caller that also reads Metrics fields directly, like Reconciler) must use
+// NewRecorderFromMetrics instead — calling this with the same registry a
+// Metrics bundle already lives on panics on the second, colliding
+// MustRegister call.
 func NewRecorder(registry *prometheus.Registry, eventRecorder record.EventRecorder, node string) *Recorder {
+	return NewRecorderFromMetrics(NewMetrics(registry), eventRecorder, node)
+}
+
+// NewRecorderFromMetrics builds a Recorder that reports as node, reusing
+// metrics (an already-registered Metrics bundle, typically built once via
+// NewMetrics and also handed to a caller like Reconciler that reads its
+// fields directly) rather than registering a second bundle on a second
+// registry. This is the seam that lets a process expose exactly one
+// Prometheus registry: two independently-registered bundles merged only at
+// scrape time via prometheus.Gatherers still share one failure mode if they
+// ever define an overlapping series — Gather() fails atomically for the
+// whole scrape, not just the colliding family — so this operator keeps a
+// single registry, and this function is how a second caller (the Applier
+// path) reuses the one Metrics bundle a first caller (Lifecycle, for
+// Reconciler) already registered, instead of building its own.
+func NewRecorderFromMetrics(metrics *Metrics, eventRecorder record.EventRecorder, node string) *Recorder {
+	if metrics == nil {
+		panic("observe: NewRecorderFromMetrics: metrics must not be nil")
+	}
 	if node == "" {
-		panic("observe: NewRecorder: node must not be empty")
+		panic("observe: NewRecorderFromMetrics: node must not be empty")
 	}
 	return &Recorder{
-		metrics: NewMetrics(registry),
+		metrics: metrics,
 		events:  NewEventRecorder(eventRecorder),
 		node:    node,
 	}

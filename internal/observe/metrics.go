@@ -42,8 +42,10 @@ var allowedMetricLabelSet = func() map[string]bool {
 // package never writes to the global default registry.
 type Metrics struct {
 	// PodsInTier is the number of pods currently in each CPU tier on this
-	// node. This subtask only registers the series; the component that
-	// tracks live tier membership sets its value.
+	// node. Reconciler is the only writer: it recomputes every series from
+	// a full listing of its node's pods on each reconcile pass (see
+	// Reconciler.refreshPodsInTier), never an increment/decrement per
+	// event.
 	PodsInTier *prometheus.GaugeVec
 	// TierApplyTotal counts tier-apply attempts, split by outcome and
 	// reason. Recorder is the only intended caller: it increments this

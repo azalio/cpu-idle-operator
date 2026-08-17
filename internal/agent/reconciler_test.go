@@ -3,9 +3,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +21,8 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+
+	dto "github.com/prometheus/client_model/go"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -414,4 +418,364 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 			t.Fatal("Reconcile() produced no Event: an unrecognized tier value must still fire TierValueUnknown (AC-16) even though it requests no active tier and plans zero cgroup writes")
 		}
 	})
+}
+
+// podsInTierSamples extracts cpi_pods_in_tier's samples from a Gather()
+// snapshot, keyed by "namespace|qos_class|tier" (node is omitted: every
+// sample in these tests shares the same node label).
+func podsInTierSamples(t *testing.T, families []*dto.MetricFamily) map[string]float64 {
+	t.Helper()
+	samples := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "cpi_pods_in_tier" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			var namespace, qosClass, tierLabel string
+			for _, label := range metric.GetLabel() {
+				switch label.GetName() {
+				case "namespace":
+					namespace = label.GetValue()
+				case "qos_class":
+					qosClass = label.GetValue()
+				case "tier":
+					tierLabel = label.GetValue()
+				}
+			}
+			samples[namespace+"|"+qosClass+"|"+tierLabel] = metric.GetGauge().GetValue()
+		}
+	}
+	return samples
+}
+
+// TestPodsInTierReflectsFullNodeState covers the fix for cpi_pods_in_tier
+// (previously registered but never written in production): the gauge is
+// recomputed from a full listing of the informer cache on every Reconcile
+// call, not incremented per pod, so it cannot drift from reality and does
+// not depend on which specific pod's key triggered the pass -- the key used
+// below names a pod that is not even in the cache.
+func TestPodsInTierReflectsFullNodeState(t *testing.T) {
+	root := t.TempDir()
+
+	idlePod := testPod("55555555-1111-1111-1111-111111111111", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	idlePod.Name = "idle-pod"
+
+	burstPod := testPod("55555555-2222-2222-2222-222222222222", "500m", map[string]string{
+		annotations.BurstKey: "",
+	})
+	burstPod.Name = "burst-pod"
+
+	// Requests burst but declares no CPU limit: BurstActive stays false
+	// (AC-4's TierInactive case), so this pod must not count toward the
+	// burst tier even though it carries the annotation.
+	inactiveBurstPod := testPod("55555555-3333-3333-3333-333333333333", "", map[string]string{
+		annotations.BurstKey: "",
+	})
+	inactiveBurstPod.Name = "inactive-burst-pod"
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for _, pod := range []*corev1.Pod{idlePod, burstPod, inactiveBurstPod} {
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+	}
+	lister := corelisters.NewPodLister(indexer)
+
+	applierFake := &fakeApplier{}
+	registry := prometheus.NewRegistry()
+	metrics := observe.NewMetrics(registry)
+	reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+
+	if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	got := podsInTierSamples(t, families)
+	want := map[string]float64{"prod|Burstable|idle": 1, "prod|Burstable|burst": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpi_pods_in_tier samples = %v, want %v", got, want)
+	}
+
+	// Removing a pod from the cache and reconciling again must shrink the
+	// gauge back down -- proving the recompute is a full replace, not an
+	// increment that could only ever grow.
+	if err := indexer.Delete(idlePod); err != nil {
+		t.Fatalf("indexer.Delete: %v", err)
+	}
+	if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
+		t.Fatalf("Reconcile() second pass error = %v", err)
+	}
+
+	families, err = registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	got = podsInTierSamples(t, families)
+	want = map[string]float64{"prod|Burstable|burst": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpi_pods_in_tier samples after delete = %v, want %v", got, want)
+	}
+}
+
+// TestReconcileLogsQoSStatusMismatch covers the fix wiring up
+// qos.VerifyAgainstStatus (previously computed nowhere in production,
+// resolution 14): a pod whose status.qosClass disagrees with the
+// spec-computed class must log exactly one Warn line naming the
+// disagreement, and the disagreement alone -- with no tier requested and an
+// already-converged cgroup -- must never reach the Applier.
+func TestReconcileLogsQoSStatusMismatch(t *testing.T) {
+	t.Run("mismatch_logs_warn_once_and_touches_no_applier_call", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "66666666-1111-1111-1111-111111111111"
+		// Already reverted / no tier active: this pod requests no tier, so
+		// Reconcile's own plan is empty and only the QoS check produces
+		// any log output.
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+			"0", "1", "100000 100000", "0")
+
+		pod := testPod(uid, "500m", nil)
+		// testPod's single container has a CPU limit but no CPU request,
+		// so qos.ClassOf(pod.Spec) computes Burstable; a status of
+		// Guaranteed disagrees with it.
+		pod.Status.QOSClass = corev1.PodQOSGuaranteed
+
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		lister := corelisters.NewPodLister(indexer)
+
+		applierFake := &fakeApplier{}
+		metrics := observe.NewMetrics(prometheus.NewRegistry())
+		reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+
+		var logBuf bytes.Buffer
+		reconciler.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+
+		out := logBuf.String()
+		if got := strings.Count(out, "level=WARN"); got != 1 {
+			t.Fatalf("log output = %q, want exactly one WARN line for the QoS mismatch, got %d", out, got)
+		}
+		if !strings.Contains(out, "computed class") || !strings.Contains(out, "status.qosClass") || !strings.Contains(out, "Burstable") || !strings.Contains(out, "Guaranteed") {
+			t.Fatalf("log output = %q, want it to name qos.VerifyAgainstStatus's mismatch (computed class Burstable vs status.qosClass Guaranteed)", out)
+		}
+		if applierFake.applyCalls != 0 || applierFake.revertCalls != 0 {
+			t.Fatalf("applier calls = {apply: %d, revert: %d}, want zero: a QoS status mismatch alone must never trigger a cgroup write", applierFake.applyCalls, applierFake.revertCalls)
+		}
+	})
+
+	t.Run("empty_status_is_not_a_mismatch", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "66666666-2222-2222-2222-222222222222"
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+			"0", "1", "100000 100000", "0")
+
+		// A freshly created pod has not had status.qosClass populated yet
+		// -- testPod's fixture leaves Status zero-valued, matching that.
+		pod := testPod(uid, "500m", nil)
+
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		lister := corelisters.NewPodLister(indexer)
+
+		applierFake := &fakeApplier{}
+		metrics := observe.NewMetrics(prometheus.NewRegistry())
+		reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+
+		var logBuf bytes.Buffer
+		reconciler.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
+
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+			t.Fatalf("Reconcile() error = %v", err)
+		}
+
+		if logBuf.Len() != 0 {
+			t.Fatalf("log output = %q, want empty: an empty status.qosClass is not a mismatch (a freshly created pod has not had status populated yet)", logBuf.String())
+		}
+	})
+}
+
+// TestPodsInTierSharedLabelCountDecrements covers the "no stale value"
+// half of the Reset-window fix on refreshPodsInTier: two pods sharing the
+// same namespace/qos_class/tier series must collapse that series' value
+// from 2 to 1, not merely leave it at a now-stale 2, when one of them
+// leaves the cache. Since the fix replaced Reset-then-Set with
+// unconditional-Set-then-delete-only-stale-keys, this also guards against
+// a regression that special-cased "still present" keys into a no-op
+// instead of always re-Setting them.
+func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
+	podA := testPod("88888888-1111-1111-1111-111111111111", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	podA.Name = "idle-a"
+
+	podB := testPod("88888888-2222-2222-2222-222222222222", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	podB.Name = "idle-b"
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for _, pod := range []*corev1.Pod{podA, podB} {
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+	}
+	lister := corelisters.NewPodLister(indexer)
+
+	registry := prometheus.NewRegistry()
+	metrics := observe.NewMetrics(registry)
+	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DriverCgroupfs, metrics, "node-a")
+
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() first pass error = %v", err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	got := podsInTierSamples(t, families)
+	want := map[string]float64{"prod|Burstable|idle": 2}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpi_pods_in_tier samples = %v, want %v", got, want)
+	}
+
+	if err := indexer.Delete(podB); err != nil {
+		t.Fatalf("indexer.Delete: %v", err)
+	}
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() second pass error = %v", err)
+	}
+	families, err = registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	got = podsInTierSamples(t, families)
+	want = map[string]float64{"prod|Burstable|idle": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpi_pods_in_tier samples after one pod left = %v, want %v -- a departed pod must shrink the shared-label gauge, not leave a stale count", got, want)
+	}
+}
+
+// TestPodsInTierNoObservableWindowUnderConcurrentScrape proves the fix
+// documented on refreshPodsInTier's own Intent comment: a scrape landing
+// concurrently with a refresh pass must never observe a series that stays
+// current across that pass as zero or missing -- the "metric silently
+// lies" symptom (a dashboard's pod count dipping to zero and bouncing
+// back) this change exists to remove. persistentPod is never removed from
+// the cache; flappingPod is added and deleted on alternating passes, so
+// every refreshPodsInTier call deletes or (re)creates the flapping series
+// while a concurrent goroutine polls Gather() in a tight loop and asserts
+// the persistent series is always exactly 1 -- with the fix, that series
+// is only ever reached by Set (never Delete), so this cannot flake: any
+// observed value other than 1 is the Reset-window bug, not scheduling
+// noise. Run with -race: it also exercises metrics.PodsInTier itself
+// (Set/Delete from the refresh goroutine, Gather from this one) under the
+// race detector, the concurrency the fixed code must tolerate.
+func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
+	persistentPod := testPod("99999999-1111-1111-1111-111111111111", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	persistentPod.Name = "persistent"
+	persistentPod.Namespace = "persistent-ns"
+
+	flappingPod := testPod("99999999-2222-2222-2222-222222222222", "500m", map[string]string{
+		annotations.BurstKey: "",
+	})
+	flappingPod.Name = "flapping"
+	flappingPod.Namespace = "flapping-ns"
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(persistentPod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	lister := corelisters.NewPodLister(indexer)
+
+	registry := prometheus.NewRegistry()
+	metrics := observe.NewMetrics(registry)
+	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DriverCgroupfs, metrics, "node-a")
+
+	// Intent: establish the persistent series before the race starts, so
+	// the poll loop below only ever has to tell "still 1" apart from
+	// "briefly wiped", never from "not created yet".
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() initial pass error = %v", err)
+	}
+
+	const iterations = 3000
+	done := make(chan struct{})
+	errs := make(chan error, 1)
+
+	// Intent: this goroutine is the only writer to both indexer and
+	// reconciler.podsInTierLabels for the rest of the test, matching
+	// production's single-goroutine workqueue loop (informer.go) -- the
+	// invariant that lets refreshPodsInTier skip locking that field.
+	go func() {
+		defer close(done)
+		for i := 0; i < iterations; i++ {
+			var mutateErr error
+			if i%2 == 0 {
+				mutateErr = indexer.Add(flappingPod)
+			} else {
+				mutateErr = indexer.Delete(flappingPod)
+			}
+			if mutateErr != nil {
+				select {
+				case errs <- fmt.Errorf("mutate flapping pod (iteration %d): %w", i, mutateErr):
+				default:
+				}
+				return
+			}
+			if err := reconciler.refreshPodsInTier(); err != nil {
+				select {
+				case errs <- fmt.Errorf("refreshPodsInTier() (iteration %d): %w", i, err):
+				default:
+				}
+				return
+			}
+		}
+	}()
+
+	const persistentKey = "persistent-ns|Burstable|idle"
+pollLoop:
+	for {
+		select {
+		case <-done:
+			break pollLoop
+		default:
+		}
+		families, err := registry.Gather()
+		if err != nil {
+			t.Fatalf("Gather() error = %v", err)
+		}
+		samples := podsInTierSamples(t, families)
+		if got, present := samples[persistentKey]; !present || got != 1 {
+			t.Fatalf("observed %s = %v (present=%v) during a concurrent refresh pass, want always 1 -- a series that stayed current across the pass must never be visible as reset", persistentKey, got, present)
+		}
+	}
+
+	select {
+	case err := <-errs:
+		t.Fatalf("background refresh loop: %v", err)
+	default:
+	}
 }

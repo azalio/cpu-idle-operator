@@ -21,6 +21,13 @@ profile: full
 #   - make check
 #   - pytest tests/ -v
 
+# Сборочная проверка end-of-turn хука.
+# internal/cgroup зависит от github.com/opencontainers/cgroups, которая
+# собирается только под Linux (unix.Openat2, RESOLVE_BENEATH). На macOS-хосте
+# `go build ./...` падает по определению, и хук выдавал ложный critical на
+# каждом ходу. Ключ добавлен фиксом azalio/map-framework#435 (PR #436).
+checks.go.goos: linux
+
 # Policy thresholds
 # research_threshold_existing_files: 3
 # final_verify_subtask_threshold: 5

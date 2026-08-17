@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/labels"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
@@ -45,6 +46,21 @@ type Reconciler struct {
 	metrics    *observe.Metrics
 	node       string
 	logger     *slog.Logger
+
+	// podsInTierLabels is the label-set metrics.PodsInTier carried after
+	// the previous refreshPodsInTier pass. It exists purely so that pass
+	// can delete only the series that disappeared (a pod that changed tier
+	// or left the cache) instead of calling GaugeVec.Reset -- Reset drops
+	// every child immediately, and a scrape landing in the window between
+	// that Reset and this pass's last Set would read zero or a partial
+	// count for a pod whose tier never actually changed. This is state
+	// about the metric's own previous shape, not about a pod, so it does
+	// not reintroduce the per-pod cache Reconcile otherwise avoids (see
+	// Reconcile's Intent comment on refreshPodsInTier). Reconcile is only
+	// ever driven by Informer.Run's single-goroutine workqueue loop
+	// (informer.go), so this field is written by at most one goroutine at
+	// a time and needs no lock of its own.
+	podsInTierLabels map[podsInTierKey]struct{}
 }
 
 // NewReconciler builds a Reconciler that reconciles pods from lister's
@@ -115,6 +131,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		return err
 	}
 
+	// Intent: recomputed from a full listing of this node's pods on every
+	// call, never incremented/decremented per event — a gauge is a
+	// snapshot of current state, and this Reconciler only ever sees pods
+	// one at a time, so an incremental update could never recover from a
+	// missed or misordered event without drifting from reality forever. A
+	// full recompute is self-correcting by construction: a stale entry
+	// left over from a pod that has since changed tier, or been deleted,
+	// simply does not get re-Set this pass and Reset() below clears it,
+	// rather than requiring every code path that could change a pod's
+	// tier membership to also remember to decrement the old bucket.
+	if err := r.refreshPodsInTier(); err != nil {
+		r.logger.Error("agent: failed to refresh cpi_pods_in_tier", "error", err)
+	}
+
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return fmt.Errorf("agent: reconcile: split key %q: %w", key, err)
@@ -130,6 +160,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 
 	desired, notes := tier.Desired(pod)
 	wantsActiveTier := desired.IdleRequested || desired.BurstRequested
+
+	// Intent: resolution 14 makes the spec-derived class authoritative and
+	// status.qosClass a sanity check only — this is that check's one
+	// production call site. A mismatch never changes desired.QoSClass or
+	// this pod's cgroup path; it is logged, once per pod per reconcile
+	// pass (this call site runs exactly once per Reconcile invocation),
+	// purely so a real disagreement is visible before it silently sends a
+	// write to the wrong QoS class's cgroup path.
+	if mismatch, message := qos.VerifyAgainstStatus(desired.QoSClass, pod.Status.QOSClass); mismatch {
+		r.logger.Warn(message, "pod", key)
+	}
 
 	dir, err := cgroup.PodCgroupPath(r.cgroupRoot, r.driver, qos.ToCgroupClass(desired.QoSClass), string(desired.UID))
 	if err != nil {
@@ -197,4 +238,65 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		return r.applier.Apply(ctx, pod)
 	}
 	return r.applier.Revert(ctx, pod, snapshot)
+}
+
+// podsInTierKey identifies one cpi_pods_in_tier series: everything the
+// metric is labeled by except node, which is constant for this Reconciler
+// (every pod it ever lists lives on the same node, r.node).
+type podsInTierKey struct {
+	namespace string
+	qosClass  string
+	tier      string
+}
+
+// refreshPodsInTier recomputes metrics.PodsInTier from a full listing of
+// this node's pods in the informer cache (see Reconcile's own Intent
+// comment on why this is a full recompute, not an increment/decrement per
+// event). "In a tier" means tier.Desired's own notion of a tier actually
+// taking effect: IdleRequested for idle (idle has no separate "requested
+// but inactive" case — cpu.idle either is or is not requested), and
+// BurstActive — not merely BurstRequested — for burst, since a burst
+// annotation with no positive CPU limit to act on is reported as
+// TierInactive (AC-4), never actually reaching the burst tier.
+//
+// Intent: every current key is Set before any stale key is deleted, so a
+// concurrent scrape never observes a window where a series that is still
+// current has been wiped but not yet re-written -- the defect a prior
+// Reset-then-Set-loop version of this function had. Only labels present in
+// r.podsInTierLabels (this Reconciler's own previous pass) but absent from
+// this pass's counts are deleted, which is exactly the set of series that
+// stopped applying (a pod's tier changed, or it left the cache) -- an
+// unrelated series this Reconciler never wrote is never touched.
+func (r *Reconciler) refreshPodsInTier() error {
+	pods, err := r.lister.List(labels.Everything())
+	if err != nil {
+		return fmt.Errorf("agent: refresh pods-in-tier: list pods: %w", err)
+	}
+
+	counts := make(map[podsInTierKey]float64, len(pods))
+	for _, pod := range pods {
+		desired, _ := tier.Desired(pod)
+		if desired.IdleRequested {
+			counts[podsInTierKey{namespace: pod.Namespace, qosClass: string(desired.QoSClass), tier: "idle"}]++
+		}
+		if desired.BurstActive {
+			counts[podsInTierKey{namespace: pod.Namespace, qosClass: string(desired.QoSClass), tier: "burst"}]++
+		}
+	}
+
+	for key, count := range counts {
+		r.metrics.PodsInTier.WithLabelValues(r.node, key.namespace, key.qosClass, key.tier).Set(count)
+	}
+	for key := range r.podsInTierLabels {
+		if _, stillPresent := counts[key]; !stillPresent {
+			r.metrics.PodsInTier.DeleteLabelValues(r.node, key.namespace, key.qosClass, key.tier)
+		}
+	}
+
+	currentLabels := make(map[podsInTierKey]struct{}, len(counts))
+	for key := range counts {
+		currentLabels[key] = struct{}{}
+	}
+	r.podsInTierLabels = currentLabels
+	return nil
 }

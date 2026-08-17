@@ -181,6 +181,58 @@ func TestNormalizeTierApplyReasonKnownValuesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestNewRecorderFromMetricsSharesOneRegistry covers the fix for the
+// double-Prometheus-registry defect: before NewRecorderFromMetrics existed,
+// a caller that already had a Metrics bundle registered on a registry (the
+// way Reconciler does) had no way to hand that same bundle to a Recorder,
+// so the only option was a second, dedicated registry merged at scrape
+// time via prometheus.Gatherers -- two registries that would fail the
+// *entire* /metrics scrape, not just one family, the moment they ever
+// defined an overlapping series (Gather() errors atomically). This test
+// proves the fix: a Metrics bundle registered once, then handed to both a
+// direct caller (as Reconciler reads metrics.PodsInTier) and a
+// NewRecorderFromMetrics-built Recorder (as the Applier path does),
+// coexist on the one registry with no registration panic and no duplicate
+// family in Gather()'s output.
+func TestNewRecorderFromMetricsSharesOneRegistry(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := NewMetrics(registry)
+	fake := &fakeEventRecorder{}
+	recorder := NewRecorderFromMetrics(metrics, fake, "node-a")
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "prod", UID: "pod-uid-1"},
+	}
+
+	// Touch a metric the way Reconciler does: directly through the shared
+	// Metrics bundle, never through Recorder.
+	metrics.PodsInTier.WithLabelValues("node-a", "prod", "Burstable", "idle").Set(1)
+	// Touch a metric the way the Applier path does: through Recorder,
+	// which must be writing into the very same Metrics instance.
+	recorder.Applied(pod, "cpu.idle", "applied", "ok")
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v, want no error: NewRecorderFromMetrics must not register a second bundle on registry", err)
+	}
+
+	seen := map[string]int{}
+	for _, family := range families {
+		seen[family.GetName()]++
+	}
+	for name, count := range seen {
+		if count != 1 {
+			t.Errorf("metric family %q appeared %d times in Gather() output, want exactly 1 (duplicate registration)", name, count)
+		}
+	}
+	if seen["cpi_pods_in_tier"] != 1 {
+		t.Errorf("Gather() output = %v, want cpi_pods_in_tier (Reconciler-side write) present exactly once", seen)
+	}
+	if seen["cpi_tier_apply_total"] != 1 {
+		t.Errorf("Gather() output = %v, want cpi_tier_apply_total (Recorder-side write) present exactly once", seen)
+	}
+}
+
 // TestNormalizeTierApplyReasonUnknownTextCollapsesToOther checks that
 // arbitrary kernel-error text outside the bounded vocabulary — not just the
 // two fixtures TestRecorderNormalizesUnrecognizedReasonToOther exercises

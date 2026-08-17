@@ -143,20 +143,17 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 
 	eventRecorder := lc.eventRecorder()
 
-	// Intent: apply.NewApplier's Recorder always builds its own fresh
-	// *observe.Metrics bundle on whatever registry it is given (see
-	// observe.NewRecorder) — there is no exported way to hand it the
-	// Metrics instance already registered above. Registering both bundles
-	// on the same registry would panic on the second, identical
-	// MustRegister call. A second, dedicated registry avoids that
-	// collision; Gatherers below still exposes every family from both
-	// registries on the single /metrics endpoint, so nothing observable
-	// is lost by splitting them.
+	// Intent: observe.NewRecorderFromMetrics reuses the single Metrics
+	// bundle already registered on registry above instead of registering a
+	// second bundle on a second registry (the seam that used to be
+	// missing, per observe.NewRecorder's own doc comment) — this process
+	// now exposes exactly one Prometheus registry, so there is no second
+	// registry a future metric could collide with and take down the whole
+	// /metrics scrape (Gather() fails atomically across every family the
+	// instant two collide, not just the colliding one).
 	var applier Applier
 	if gateResult.Ready {
-		applierRegistry := prometheus.NewRegistry()
-		recorder := observe.NewRecorder(applierRegistry, eventRecorder, lc.Config.NodeName)
-		gatherers = append(gatherers, applierRegistry)
+		recorder := observe.NewRecorderFromMetrics(metrics, eventRecorder, lc.Config.NodeName)
 
 		applier = lc.Applier
 		if applier == nil {
