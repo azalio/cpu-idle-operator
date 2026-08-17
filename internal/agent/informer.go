@@ -66,8 +66,12 @@ type Informer struct {
 // every resyncPeriod (resolution T-011: 60s in production, insurance
 // against an unknown writer, not the primary mechanism). It registers the
 // Add/Update/Delete handlers and returns immediately; call Start or Run to
-// actually begin watching.
-func NewInformer(client kubernetes.Interface, nodeName string, resyncPeriod time.Duration) *Informer {
+// actually begin watching. It returns a non-nil error if handler
+// registration itself fails -- silently ignoring that would leave the
+// informer subscribed to nothing: it would still start, its cache would
+// still sync, and readiness would still report 200, while no Add/Update/
+// Delete ever reached the workqueue.
+func NewInformer(client kubernetes.Interface, nodeName string, resyncPeriod time.Duration) (*Informer, error) {
 	// NewFilteredSharedInformerFactory is deprecated in favor of
 	// NewSharedInformerFactoryWithOptions; the default namespace scope is
 	// already metav1.NamespaceAll, so WithTweakListOptions alone
@@ -92,7 +96,7 @@ func NewInformer(client kubernetes.Interface, nodeName string, resyncPeriod time
 		queue:    queue,
 	}
 
-	inf.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := inf.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			inf.enqueue(obj, false)
 		},
@@ -102,9 +106,11 @@ func NewInformer(client kubernetes.Interface, nodeName string, resyncPeriod time
 		DeleteFunc: func(obj interface{}) {
 			inf.enqueue(obj, false)
 		},
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("agent: informer: add event handler: %w", err)
+	}
 
-	return inf
+	return inf, nil
 }
 
 // isResync reports whether oldObj and newObj — an UpdateFunc handler's two

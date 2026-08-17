@@ -1,23 +1,23 @@
 {
   "schema_version": "1.0",
   "branch": "feat-cpi-idle-operator-v1alpha1",
-  "updated_at": "2026-08-17T12:36:40.825204Z",
-  "event_count": 642,
+  "updated_at": "2026-08-17T13:03:47.047651Z",
+  "event_count": 686,
   "aggregate": {
-    "input": 2342,
-    "output": 556301,
-    "cache_creation": 4216992,
-    "cache_read": 209388185,
+    "input": 2458,
+    "output": 586273,
+    "cache_creation": 4339272,
+    "cache_read": 213695451,
     "cache_hit_ratio": 1.0,
-    "est_cost_usd": 434.9086
+    "est_cost_usd": 445.9119
   },
   "by_subtask": {
     "unattributed": {
-      "input": 2342,
-      "output": 556301,
-      "cache_creation": 4216992,
-      "cache_read": 209388185,
-      "est_cost_usd": 434.908582
+      "input": 2458,
+      "output": 586273,
+      "cache_creation": 4339272,
+      "cache_read": 213695451,
+      "est_cost_usd": 445.911872
     }
   },
   "by_agent": {
@@ -29,37 +29,37 @@
       "est_cost_usd": 296.737429
     },
     "actor": {
-      "input": 1708,
-      "output": 226756,
-      "cache_creation": 696969,
-      "cache_read": 72047107,
-      "est_cost_usd": 138.171153
+      "input": 1824,
+      "output": 256728,
+      "cache_creation": 819249,
+      "cache_read": 76354373,
+      "est_cost_usd": 149.174443
     }
   },
   "by_phase": {
     "unknown": {
-      "input": 2342,
-      "output": 556301,
-      "cache_creation": 4216992,
-      "cache_read": 209388185,
-      "est_cost_usd": 434.908582
+      "input": 2458,
+      "output": 586273,
+      "cache_creation": 4339272,
+      "cache_read": 213695451,
+      "est_cost_usd": 445.911872
     }
   },
   "research_roi": {
     "schema_version": "1.0",
     "research_tokens": 0,
     "research_est_cost_usd": 0,
-    "actor_monitor_tokens": 72972540,
-    "actor_monitor_est_cost_usd": 138.171153,
+    "actor_monitor_tokens": 77432174,
+    "actor_monitor_est_cost_usd": 149.174443,
     "research_token_share": 0.0,
     "by_subtask": {
       "unattributed": {
         "research_tokens": 0,
         "research_est_cost_usd": 0.0,
         "research_event_count": 0,
-        "actor_monitor_tokens": 72972540,
-        "actor_monitor_est_cost_usd": 138.171153,
-        "actor_monitor_event_count": 303,
+        "actor_monitor_tokens": 77432174,
+        "actor_monitor_est_cost_usd": 149.174443,
+        "actor_monitor_event_count": 347,
         "research_token_share": 0.0
       }
     }

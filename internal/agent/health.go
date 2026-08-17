@@ -79,11 +79,15 @@ func (h *Health) ReadinessHandler() http.HandlerFunc {
 		ready, reason := h.Ready()
 		if !ready {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			fmt.Fprintf(w, "not ready: %s\n", reason)
+			// Intent: a write error here only means the client already
+			// disconnected after the status code was sent; the probe
+			// result is what matters, and there is nothing left to react
+			// to once WriteHeader has already gone out.
+			_, _ = fmt.Fprintf(w, "not ready: %s\n", reason)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		_, _ = fmt.Fprintln(w, "ok")
 	}
 }
 
@@ -96,7 +100,10 @@ func (h *Health) ReadinessHandler() http.HandlerFunc {
 func (h *Health) LivenessHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		// Intent: same reasoning as ReadinessHandler above -- a write error
+		// here only means the client disconnected after the status code
+		// was already sent.
+		_, _ = fmt.Fprintln(w, "ok")
 	}
 }
 

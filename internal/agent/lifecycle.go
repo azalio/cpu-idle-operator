@@ -168,6 +168,15 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 			"reason", string(gateResult.Reason))
 	}
 
+	// Intent: build the informer before either HTTP listener is bound, so a
+	// handler-registration failure returns before any server has started --
+	// no shutdown/cleanup path is needed for servers that were never
+	// brought up in the first place.
+	informer, err := NewInformer(lc.Client, lc.Config.NodeName, lc.Config.ResyncPeriod)
+	if err != nil {
+		return fmt.Errorf("agent: informer: %w", err)
+	}
+
 	metricsListener, err := lc.listener(lc.MetricsListener, lc.Config.MetricsAddr)
 	if err != nil {
 		return fmt.Errorf("agent: metrics listener: %w", err)
@@ -185,8 +194,6 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	serverErrs := make(chan error, 2)
 	lc.serve(&serverWG, serverErrs, metricsServer, metricsListener, "metrics")
 	lc.serve(&serverWG, serverErrs, healthServer, healthListener, "health")
-
-	informer := NewInformer(lc.Client, lc.Config.NodeName, lc.Config.ResyncPeriod)
 
 	var runErr error
 	if gateResult.Ready {

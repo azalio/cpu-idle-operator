@@ -159,7 +159,10 @@ func TestVC1AnnotatedPodGetsIdle(t *testing.T) {
 		})
 
 		client := fake.NewSimpleClientset(pod)
-		informer := NewInformer(client, "node-a", time.Hour)
+		informer, err := NewInformer(client, "node-a", time.Hour)
+		if err != nil {
+			t.Fatalf("NewInformer() error = %v, want nil", err)
+		}
 		recorder, events := newTestObservers("node-a")
 		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
@@ -201,7 +204,10 @@ func TestVC2LivePodAnnotationAddAndRemove(t *testing.T) {
 		pod := testPod(uid, "500m", nil)
 
 		client := fake.NewSimpleClientset(pod)
-		informer := NewInformer(client, "node-a", time.Hour)
+		informer, err := NewInformer(client, "node-a", time.Hour)
+		if err != nil {
+			t.Fatalf("NewInformer() error = %v, want nil", err)
+		}
 		recorder, events := newTestObservers("node-a")
 		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())

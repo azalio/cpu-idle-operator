@@ -42,7 +42,10 @@ func TestVC4FieldSelectorScopesToNode(t *testing.T) {
 			return false, nil, nil
 		})
 
-		informer := NewInformer(client, "node-a", time.Minute)
+		informer, err := NewInformer(client, "node-a", time.Minute)
+		if err != nil {
+			t.Fatalf("NewInformer() error = %v, want nil", err)
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

@@ -118,7 +118,10 @@ func waitForStatus(t *testing.T, url string, want int, timeout time.Duration) (b
 			continue
 		}
 		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		// Intent: nothing left to react to in a test poll loop once the body
+		// has already been read; a close error here would only mean the
+		// connection was already gone.
+		_ = resp.Body.Close()
 		body, status = string(data), resp.StatusCode
 		if status == want {
 			return body, status
@@ -140,7 +143,10 @@ func waitForMetric(t *testing.T, url, want string, timeout time.Duration) string
 		resp, err := client.Get(url)
 		if err == nil {
 			data, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			// Intent: same reasoning as waitForStatus above -- nothing left
+			// to react to once the body has already been read in a test
+			// poll loop.
+			_ = resp.Body.Close()
 			lastBody = string(data)
 			if strings.Contains(lastBody, want) {
 				return lastBody

@@ -93,7 +93,11 @@ type RevertAllOptions struct {
 // cgroup.ErrCgroupGone, the expected race of a pod deleted between the
 // List call and this pass reaching it, which never counts as a failure —
 // and it never stops on the first failure: every pod in the list is
-// attempted regardless of an earlier pod's outcome.
+// attempted regardless of an earlier pod's outcome. It also returns a
+// non-nil error when every pod reverted cleanly but the result table itself
+// failed to reach opts.Out (see printRevertTable): that table is this
+// mode's only human-facing report, so a run whose report never actually
+// arrived must not exit 0.
 func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions) error {
 	if opts.Client == nil {
 		return errors.New("agent: RunRevertAll: Client must not be nil")
@@ -140,10 +144,16 @@ func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions)
 		results = append(results, result)
 	}
 
-	printRevertTable(out, results)
+	tableErr := printRevertTable(out, results)
+	if tableErr != nil {
+		logger.Error("agent: revert-all: failed to print result table", "error", tableErr)
+	}
 
 	if failures > 0 {
 		return fmt.Errorf("agent: revert-all: %d of %d pods failed to revert", failures, len(pods))
+	}
+	if tableErr != nil {
+		return fmt.Errorf("agent: revert-all: %w", tableErr)
 	}
 	return nil
 }
@@ -292,10 +302,15 @@ func describeActiveTiers(snapshot apply.Snapshot) string {
 	return strings.Join(tiers, "+")
 }
 
-// printRevertTable prints results as a pod / cleared-tiers / result table.
-func printRevertTable(out io.Writer, results []revertResult) {
+// printRevertTable prints results as a pod / cleared-tiers / result table
+// and reports whether that table actually reached out. A tabwriter only
+// buffers each Fprintln/Fprintf below into its internal column layout --
+// the real write to out happens at Flush, so that is the one error this
+// function surfaces; the per-line writes are discarded explicitly, since
+// any real I/O failure among them would resurface at Flush anyway.
+func printRevertTable(out io.Writer, results []revertResult) error {
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "POD\tCLEARED\tRESULT")
+	_, _ = fmt.Fprintln(w, "POD\tCLEARED\tRESULT")
 	for _, result := range results {
 		cleared := result.cleared
 		if cleared == "" {
@@ -305,11 +320,10 @@ func printRevertTable(out io.Writer, results []revertResult) {
 		if result.err != nil {
 			status = fmt.Sprintf("error: %v", result.err)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", result.key, cleared, status)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", result.key, cleared, status)
 	}
-	// Intent: a flush error here would only ever be a broken out writer
-	// (e.g. a closed pipe); there is nothing left for this one-shot pass to
-	// do about it once every revert has already been attempted, so it is
-	// deliberately not surfaced as RunRevertAll's return error.
-	_ = w.Flush()
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("flush result table: %w", err)
+	}
+	return nil
 }

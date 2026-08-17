@@ -1,35 +1,17 @@
 {
-  "generated_at": "2026-08-17T12:41:24.266706+00:00",
+  "generated_at": "2026-08-17T13:03:35.517626+00:00",
   "entry_count": 100,
-  "total_entries_seen": 272,
-  "dropped_count": 172,
+  "total_entries_seen": 319,
+  "dropped_count": 219,
   "file_stats": [
     {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/test/e2e/helpers.go",
-      "iterations": 5,
-      "avg_effectiveness": 1.0,
-      "is_thrashing": true
-    },
-    {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/apply/apply_test.go",
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/revertall.go",
       "iterations": 3,
       "avg_effectiveness": 1.0,
       "is_thrashing": true
     },
     {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/lifecycle_test.go",
-      "iterations": 2,
-      "avg_effectiveness": 1.0,
-      "is_thrashing": false
-    },
-    {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/cmd/agent/main_test.go",
-      "iterations": 2,
-      "avg_effectiveness": 1.0,
-      "is_thrashing": false
-    },
-    {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/config/flags_test.go",
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/test/e2e/helpers.go",
       "iterations": 2,
       "avg_effectiveness": 1.0,
       "is_thrashing": false
@@ -41,20 +23,32 @@
       "is_thrashing": false
     },
     {
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/.github/workflows/ci.yaml",
+      "iterations": 2,
+      "avg_effectiveness": 1.0,
+      "is_thrashing": false
+    },
+    {
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/health.go",
+      "iterations": 2,
+      "avg_effectiveness": 1.0,
+      "is_thrashing": false
+    },
+    {
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/informer.go",
+      "iterations": 2,
+      "avg_effectiveness": 1.0,
+      "is_thrashing": false
+    },
+    {
       "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/reconciler_test.go",
-      "iterations": 1,
+      "iterations": 2,
       "avg_effectiveness": 1.0,
       "is_thrashing": false
     },
     {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/revertall_test.go",
-      "iterations": 1,
-      "avg_effectiveness": 1.0,
-      "is_thrashing": false
-    },
-    {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/test/e2e/preflight_test.go",
-      "iterations": 1,
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/cmd/agent/main_test.go",
+      "iterations": 2,
       "avg_effectiveness": 1.0,
       "is_thrashing": false
     },
@@ -65,15 +59,21 @@
       "is_thrashing": false
     },
     {
-      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/.github/workflows/ci.yaml",
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/lifecycle.go",
+      "iterations": 1,
+      "avg_effectiveness": 1.0,
+      "is_thrashing": false
+    },
+    {
+      "file": "/Users/azalio/gitroot/azalio/cpi-idle-operator/internal/agent/informer_test.go",
       "iterations": 1,
       "avg_effectiveness": 1.0,
       "is_thrashing": false
     }
   ],
   "aggregate": {
-    "total_iterations": 272,
+    "total_iterations": 319,
     "avg_effectiveness": 1.0,
-    "total_thrashing_alerts": 2
+    "total_thrashing_alerts": 1
   }
 }
