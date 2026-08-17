@@ -1,0 +1,14 @@
+# map:update-runtime — local automatic-update state; never commit.
+.map/update-state.json
+.map/update.lock
+.map/provider-refresh.lock
+.map/installer.lock
+.map/gitignore.lock
+# map:settings-local — per-user Claude Code approvals / autonomy posture; never commit
+.claude/settings.local.json
+
+# Go build artifacts
+bin/
+*.test
+*.out
+coverage.txt
