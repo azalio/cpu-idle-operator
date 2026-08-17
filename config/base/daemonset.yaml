@@ -1,0 +1,92 @@
+# SECURITY NOTE (HC-6, measured in resolution T-005): this DaemonSet does
+# not set privileged: true and does not request SYS_ADMIN. A pod with
+# capabilities dropped to none and privileged: false has been measured
+# writing another pod's cpu.idle through the hostPath mount below — DAC
+# root (runAsUser: 0) plus the rw hostPath is sufficient.
+#
+# That is not "minimal privilege" and this comment says so plainly: a
+# writable hostPath onto /sys/fs/cgroup is de facto the ability to change
+# the cgroup of any pod on the node. It is unavoidable for a node agent
+# that writes per-pod cgroup files, but it must never be described as a
+# low-privilege container. See README's Security Boundaries section for
+# the same wording applied to the cluster-wide picture.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cpi-idle-agent
+  namespace: cpi-idle-system
+  labels:
+    app.kubernetes.io/name: cpi-idle-operator
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cpi-idle-operator
+      app.kubernetes.io/component: agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cpi-idle-operator
+        app.kubernetes.io/component: agent
+    spec:
+      serviceAccountName: cpi-idle-agent
+      # Not a network/PID/IPC-namespace-sharing DaemonSet: the agent only
+      # needs filesystem access to /sys/fs/cgroup and the Kubernetes API,
+      # neither of which requires host namespaces.
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      containers:
+        - name: agent
+          image: ghcr.io/azalio/cpi-idle-operator:latest
+          args:
+            - --cgroup-root=/sys/fs/cgroup
+            - --node-name=$(NODE_NAME)
+            - --resync-period=60s
+            - --metrics-addr=:8080
+            - --health-addr=:8081
+          env:
+            # NODE_NAME is mandatory: internal/config.ParseFlags treats an
+            # empty node name as a fatal startup error rather than falling
+            # back to watching every node in the cluster.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # rw on purpose: the agent writes cpu.idle on pod cgroups under
+            # this path. See the SECURITY NOTE above the DaemonSet metadata
+            # for what that grants in practice.
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: false
+      volumes:
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
