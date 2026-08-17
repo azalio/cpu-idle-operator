@@ -44,7 +44,7 @@ func TestWriteKnobHappyPath(t *testing.T) {
 		t.Fatalf("seed knob file: %v", err)
 	}
 
-	if err := WriteKnob(root, dir, "cpu.idle", "1"); err != nil {
+	if err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.idle", "1"); err != nil {
 		t.Fatalf("WriteKnob returned error: %v", err)
 	}
 
@@ -65,7 +65,7 @@ func TestWriteKnobMissingDirReturnsCgroupGone(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "kubepods", "pod123")
 
-	err := WriteKnob(root, dir, "cpu.idle", "1")
+	err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.idle", "1")
 	if !errors.Is(err, ErrCgroupGone) {
 		t.Errorf("WriteKnob error = %v, want ErrCgroupGone", err)
 	}
@@ -114,7 +114,7 @@ func TestVC2CloseErrorSurfaced(t *testing.T) {
 	closeErr := &fs.PathError{Op: "close", Path: "cpu.weight", Err: syscall.EINVAL}
 	withFakeKnobWriter(t, &fakeKnobWriter{closeErr: closeErr})
 
-	err := WriteKnob(root, dir, "cpu.weight", "20")
+	err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.weight", "20")
 	if err == nil {
 		t.Fatal("expected WriteKnob to return the Close error, got nil")
 	}
@@ -137,7 +137,7 @@ func TestVC2CloseErrorTakesPriorityOverWriteError(t *testing.T) {
 	closeErr := &fs.PathError{Op: "close", Path: "cpu.weight", Err: syscall.EINVAL}
 	withFakeKnobWriter(t, &fakeKnobWriter{writeErr: writeErr, closeErr: closeErr})
 
-	err := WriteKnob(root, dir, "cpu.weight", "20")
+	err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.weight", "20")
 	if !errors.Is(err, syscall.EINVAL) {
 		t.Errorf("errors.Is(err, syscall.EINVAL) = false, want true; err = %v", err)
 	}
@@ -149,47 +149,76 @@ func TestVC2CloseErrorTakesPriorityOverWriteError(t *testing.T) {
 // TestVC3WriteTargetGuard proves INV-1: WriteKnob refuses to write above
 // pod level. Three categories of non-pod cgroup: the kubepods root, a
 // QoS-level slice/directory (checked for both driver naming schemes), and
-// a container scope.
+// a container scope. Every case is repeated with a non-default kubepods
+// name (kind's measured "kubelet-kubepods") to prove the guard rejects the
+// same shapes regardless of which name it is configured with.
 func TestVC3WriteTargetGuard(t *testing.T) {
 	base := t.TempDir()
 
 	cases := []struct {
-		name string
-		dir  string
+		name         string
+		kubepodsName string
+		dir          string
 	}{
-		{"kubepods root, systemd", filepath.Join(base, "kubepods.slice")},
-		{"kubepods root, cgroupfs", filepath.Join(base, "kubepods")},
-		{"QoS slice, systemd", filepath.Join(base, "kubepods.slice", "kubepods-burstable.slice")},
-		{"QoS dir, cgroupfs", filepath.Join(base, "kubepods", "burstable")},
-		{"container scope", filepath.Join(base, "kubepods.slice", "kubepods-burstable.slice",
+		{"kubepods root, systemd", DefaultKubepodsName, filepath.Join(base, "kubepods.slice")},
+		{"kubepods root, cgroupfs", DefaultKubepodsName, filepath.Join(base, "kubepods")},
+		{"QoS slice, systemd", DefaultKubepodsName, filepath.Join(base, "kubepods.slice", "kubepods-burstable.slice")},
+		{"QoS dir, cgroupfs", DefaultKubepodsName, filepath.Join(base, "kubepods", "burstable")},
+		{"container scope", DefaultKubepodsName, filepath.Join(base, "kubepods.slice", "kubepods-burstable.slice",
 			"kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice", "cri-containerd-abc123.scope")},
+		{"kubepods root, systemd, non-default name", "kubelet-kubepods", filepath.Join(base, "kubelet-kubepods.slice")},
+		{"kubepods root, cgroupfs, non-default name", "kubelet-kubepods", filepath.Join(base, "kubelet-kubepods")},
+		{"QoS slice, systemd, non-default name", "kubelet-kubepods",
+			filepath.Join(base, "kubelet-kubepods.slice", "kubelet-kubepods-burstable.slice")},
+		{"container scope, non-default name", "kubelet-kubepods",
+			filepath.Join(base, "kubelet-kubepods.slice", "kubelet-kubepods-burstable.slice",
+				"kubelet-kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice", "cri-containerd-abc123.scope")},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := WriteKnob(base, tc.dir, "cpu.idle", "1")
+			err := WriteKnob(base, tc.kubepodsName, tc.dir, "cpu.idle", "1")
 			if !errors.Is(err, ErrNotPodCgroup) {
-				t.Errorf("WriteKnob(%q) error = %v, want ErrNotPodCgroup", tc.dir, err)
+				t.Errorf("WriteKnob(%q, %q) error = %v, want ErrNotPodCgroup", tc.kubepodsName, tc.dir, err)
 			}
 		})
 	}
 }
 
 // TestWriteKnobAllowsPodLevelDir is the guard's negative case: a genuine
-// pod-level directory must pass the guard. The write itself still fails
-// here (no such file), but with ErrCgroupGone rather than ErrNotPodCgroup —
-// proof the guard did not fire.
+// pod-level directory must pass the guard, for both the default kubepods
+// name and a non-default one. The write itself still fails here (no such
+// file), but with ErrCgroupGone rather than ErrNotPodCgroup — proof the
+// guard did not fire.
 func TestWriteKnobAllowsPodLevelDir(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, "kubepods.slice", "kubepods-burstable.slice",
-		"kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice")
-
-	err := WriteKnob(root, dir, "cpu.idle", "1")
-	if errors.Is(err, ErrNotPodCgroup) {
-		t.Errorf("WriteKnob(%q) incorrectly rejected as non-pod cgroup: %v", dir, err)
+	cases := []struct {
+		name         string
+		kubepodsName string
+		dir          func(root string) string
+	}{
+		{"default kubepods name", DefaultKubepodsName, func(root string) string {
+			return filepath.Join(root, "kubepods.slice", "kubepods-burstable.slice",
+				"kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice")
+		}},
+		{"non-default kubepods name", "kubelet-kubepods", func(root string) string {
+			return filepath.Join(root, "kubelet-kubepods.slice", "kubelet-kubepods-burstable.slice",
+				"kubelet-kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice")
+		}},
 	}
-	if !errors.Is(err, ErrCgroupGone) {
-		t.Errorf("WriteKnob(%q) error = %v, want ErrCgroupGone", dir, err)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := tc.dir(root)
+
+			err := WriteKnob(root, tc.kubepodsName, dir, "cpu.idle", "1")
+			if errors.Is(err, ErrNotPodCgroup) {
+				t.Errorf("WriteKnob(%q, %q) incorrectly rejected as non-pod cgroup: %v", tc.kubepodsName, dir, err)
+			}
+			if !errors.Is(err, ErrCgroupGone) {
+				t.Errorf("WriteKnob(%q, %q) error = %v, want ErrCgroupGone", tc.kubepodsName, dir, err)
+			}
+		})
 	}
 }
 
@@ -200,7 +229,7 @@ func TestWriteKnobAllowsPodLevelDir(t *testing.T) {
 func TestGuardWriteTargetRejectsNonAllowListedDirs(t *testing.T) {
 	t.Run("arbitrary directory", func(t *testing.T) {
 		root := t.TempDir()
-		if err := guardWriteTarget(t.TempDir(), root); !errors.Is(err, ErrNotPodCgroup) {
+		if err := guardWriteTarget(t.TempDir(), root, DefaultKubepodsName); !errors.Is(err, ErrNotPodCgroup) {
 			t.Errorf("guardWriteTarget(arbitrary dir) error = %v, want ErrNotPodCgroup", err)
 		}
 	})
@@ -208,7 +237,7 @@ func TestGuardWriteTargetRejectsNonAllowListedDirs(t *testing.T) {
 	t.Run("non-pod subdirectory inside a real QoS slice", func(t *testing.T) {
 		root := t.TempDir()
 		dir := filepath.Join(root, "kubepods.slice", "kubepods-burstable.slice", "not-a-pod-at-all")
-		if err := guardWriteTarget(dir, root); !errors.Is(err, ErrNotPodCgroup) {
+		if err := guardWriteTarget(dir, root, DefaultKubepodsName); !errors.Is(err, ErrNotPodCgroup) {
 			t.Errorf("guardWriteTarget(%q) error = %v, want ErrNotPodCgroup", dir, err)
 		}
 	})
@@ -217,7 +246,7 @@ func TestGuardWriteTargetRejectsNonAllowListedDirs(t *testing.T) {
 		root := t.TempDir()
 		dir := filepath.Join("kubepods.slice", "kubepods-burstable.slice",
 			"kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice")
-		if err := guardWriteTarget(dir, root); !errors.Is(err, ErrNotPodCgroup) {
+		if err := guardWriteTarget(dir, root, DefaultKubepodsName); !errors.Is(err, ErrNotPodCgroup) {
 			t.Errorf("guardWriteTarget(%q) error = %v, want ErrNotPodCgroup", dir, err)
 		}
 	})
@@ -230,7 +259,15 @@ func TestGuardWriteTargetRejectsNonAllowListedDirs(t *testing.T) {
 		base := t.TempDir()
 		dir := base + "/kubepods.slice/kubepods-burstable.slice/" +
 			"kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice/../../../etc/passwd"
-		if err := guardWriteTarget(dir, base); !errors.Is(err, ErrNotPodCgroup) {
+		if err := guardWriteTarget(dir, base, DefaultKubepodsName); !errors.Is(err, ErrNotPodCgroup) {
+			t.Errorf("guardWriteTarget(%q) error = %v, want ErrNotPodCgroup", dir, err)
+		}
+	})
+
+	t.Run("non-pod subdirectory inside a real QoS slice, non-default kubepods name", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, "kubelet-kubepods.slice", "kubelet-kubepods-burstable.slice", "not-a-pod-at-all")
+		if err := guardWriteTarget(dir, root, "kubelet-kubepods"); !errors.Is(err, ErrNotPodCgroup) {
 			t.Errorf("guardWriteTarget(%q) error = %v, want ErrNotPodCgroup", dir, err)
 		}
 	})
@@ -249,36 +286,39 @@ func TestGuardWriteTargetRejectsNonAllowListedDirs(t *testing.T) {
 	t.Run("pod cgroup nested inside a real pod's own directory", func(t *testing.T) {
 		root := t.TempDir()
 		const realUID = "550e8400-e29b-41d4-a716-446655440000"
-		realPod, err := PodCgroupPath(root, DriverCgroupfs, QoSBurstable, realUID)
+		realPod, err := PodCgroupPath(root, DefaultKubepodsName, DriverCgroupfs, QoSBurstable, realUID)
 		if err != nil {
 			t.Fatalf("PodCgroupPath: %v", err)
 		}
 		fakeNestedPod := filepath.Join(realPod, "kubepods", "burstable", "podBBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")
 
-		if err := guardWriteTarget(fakeNestedPod, root); !errors.Is(err, ErrNotPodCgroup) {
+		if err := guardWriteTarget(fakeNestedPod, root, DefaultKubepodsName); !errors.Is(err, ErrNotPodCgroup) {
 			t.Errorf("guardWriteTarget(%q, root=%q) error = %v, want ErrNotPodCgroup", fakeNestedPod, root, err)
 		}
 	})
 }
 
 // TestGuardWriteTargetAllowsGenuinePodCgroupPaths proves the positive side
-// of the allow-list: every path PodCgroupPath computes, for both drivers and
-// all three QoS classes, must pass the guard.
+// of the allow-list: every path PodCgroupPath computes, for both drivers,
+// all three QoS classes, and both the default and a non-default kubepods
+// name, must pass the guard.
 func TestGuardWriteTargetAllowsGenuinePodCgroupPaths(t *testing.T) {
 	root := t.TempDir()
 	const podUID = "550e8400-e29b-41d4-a716-446655440000"
 
-	for _, driver := range []Driver{DriverSystemd, DriverCgroupfs} {
-		for _, qos := range []QoSClass{QoSGuaranteed, QoSBurstable, QoSBestEffort} {
-			t.Run(string(driver)+"/"+string(qos), func(t *testing.T) {
-				dir, err := PodCgroupPath(root, driver, qos, podUID)
-				if err != nil {
-					t.Fatalf("PodCgroupPath(%q, %q): %v", driver, qos, err)
-				}
-				if err := guardWriteTarget(dir, root); err != nil {
-					t.Errorf("guardWriteTarget(%q, root=%q) = %v, want nil", dir, root, err)
-				}
-			})
+	for _, kubepodsName := range []string{DefaultKubepodsName, "kubelet-kubepods"} {
+		for _, driver := range []Driver{DriverSystemd, DriverCgroupfs} {
+			for _, qos := range []QoSClass{QoSGuaranteed, QoSBurstable, QoSBestEffort} {
+				t.Run(kubepodsName+"/"+string(driver)+"/"+string(qos), func(t *testing.T) {
+					dir, err := PodCgroupPath(root, kubepodsName, driver, qos, podUID)
+					if err != nil {
+						t.Fatalf("PodCgroupPath(%q, %q, %q): %v", kubepodsName, driver, qos, err)
+					}
+					if err := guardWriteTarget(dir, root, kubepodsName); err != nil {
+						t.Errorf("guardWriteTarget(%q, root=%q, kubepodsName=%q) = %v, want nil", dir, root, kubepodsName, err)
+					}
+				})
+			}
 		}
 	}
 }

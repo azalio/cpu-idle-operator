@@ -31,7 +31,7 @@ func TestIntegrationApplyBothTiersWritesRealFiles(t *testing.T) {
 		annotations.BurstKey: "",
 	})
 	recorder, events, _, _ := newTestObservers("node-a")
-	applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 	if err := applier.Apply(context.Background(), pod); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -60,7 +60,7 @@ func TestIntegrationApplyRevertBothTiersWritesRealFiles(t *testing.T) {
 
 	pod := testPod(uid, "500m", nil)
 	recorder, events, _, _ := newTestObservers("node-a")
-	applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 	if err := applier.Apply(context.Background(), pod); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -84,7 +84,7 @@ func TestIntegrationApplyNoPlanTouchesNoFiles(t *testing.T) {
 		annotations.BurstKey: "",
 	})
 	recorder, events, _, _ := newTestObservers("node-a")
-	applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 	if err := applier.Apply(context.Background(), pod); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -120,7 +120,7 @@ func TestSeamWeightRestoredWhenOnlyTierRemoved(t *testing.T) {
 	}
 
 	recorder, events, _, _ := newTestObservers("node-a")
-	applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 	if err := applier.Apply(context.Background(), pod); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}

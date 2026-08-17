@@ -38,7 +38,7 @@ type fakeWriter struct {
 	results map[string]error
 }
 
-func (f *fakeWriter) WriteKnob(root, dir, name, value string) error {
+func (f *fakeWriter) WriteKnob(root, kubepodsName, dir, name, value string) error {
 	f.calls = append(f.calls, fakeWriteCall{root, dir, name, value})
 	if f.results != nil {
 		if err, ok := f.results[name]; ok {
@@ -91,11 +91,12 @@ func newTestObservers(node string) (*observe.Recorder, *observe.EventRecorder, *
 // production cgroupWriter.
 func newTestApplier(cgroupRoot string, driver cgroup.Driver, writer Writer, recorder *observe.Recorder, events *observe.EventRecorder) *Applier {
 	return &Applier{
-		cgroupRoot: cgroupRoot,
-		driver:     driver,
-		writer:     writer,
-		recorder:   recorder,
-		events:     events,
+		cgroupRoot:   cgroupRoot,
+		kubepodsName: cgroup.DefaultKubepodsName,
+		driver:       driver,
+		writer:       writer,
+		recorder:     recorder,
+		events:       events,
 	}
 }
 
@@ -126,7 +127,7 @@ func testPod(uid, cpuLimit string, annos map[string]string) *corev1.Pod {
 // assert Writer calls against it.
 func seedPodCgroup(t *testing.T, root string, driver cgroup.Driver, qosClass cgroup.QoSClass, uid string, idle, weight, max, burst string) string {
 	t.Helper()
-	dir, err := cgroup.PodCgroupPath(root, driver, qosClass, uid)
+	dir, err := cgroup.PodCgroupPath(root, cgroup.DefaultKubepodsName, driver, qosClass, uid)
 	if err != nil {
 		t.Fatalf("PodCgroupPath: %v", err)
 	}

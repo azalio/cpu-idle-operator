@@ -11,7 +11,14 @@ import (
 )
 
 const (
-	defaultCgroupRoot   = "/sys/fs/cgroup"
+	defaultCgroupRoot = "/sys/fs/cgroup"
+	// defaultKubepodsName is the top-level kubepods cgroup name a stock
+	// kubelet creates. A kubelet started with a non-default --cgroup-root
+	// (e.g. kind, which uses "/kubelet") instead prefixes every kubepods
+	// slice/directory name with its own root's basename (e.g.
+	// "kubelet-kubepods") — see internal/cgroup.PodCgroupPath's doc comment
+	// for the mechanics --kubepods-name exists to override.
+	defaultKubepodsName = "kubepods"
 	defaultResyncPeriod = 60 * time.Second
 	defaultMetricsAddr  = ":8080"
 	defaultHealthAddr   = ":8081"
@@ -28,6 +35,13 @@ var ErrEmptyNodeName = errors.New("node name is empty: pass --node-name or set N
 type Config struct {
 	// CgroupRoot is the filesystem root under which pod cgroups are located.
 	CgroupRoot string
+	// KubepodsName is the top-level kubepods cgroup slice/directory name
+	// kubelet actually uses under CgroupRoot. Defaults to "kubepods" (a
+	// stock kubelet); a kubelet started with a non-default --cgroup-root
+	// (e.g. kind's "/kubelet") needs the matching prefixed name instead
+	// (e.g. "kubelet-kubepods"), paired with a CgroupRoot pointed at that
+	// same kubelet-root slice.
+	KubepodsName string
 	// NodeName scopes the pod watch to this node; it must never be empty.
 	NodeName string
 	// ResyncPeriod is the informer's full resync interval.
@@ -49,6 +63,7 @@ func ParseFlags(argv []string) (Config, error) {
 	fs := flag.NewFlagSet("cpi-idle-agent", flag.ContinueOnError)
 
 	cgroupRoot := fs.String("cgroup-root", defaultCgroupRoot, "filesystem root under which pod cgroups are located")
+	kubepodsName := fs.String("kubepods-name", defaultKubepodsName, "top-level kubepods cgroup slice/directory name kubelet uses under --cgroup-root (non-default on e.g. kind: see README)")
 	nodeName := fs.String("node-name", os.Getenv(nodeNameEnvVar), fmt.Sprintf("node this agent watches (default: %s env var)", nodeNameEnvVar))
 	resyncPeriod := fs.Duration("resync-period", defaultResyncPeriod, "informer full resync interval")
 	revertAll := fs.Bool("revert-all", false, "run a one-shot revert of all tiers on this node, then exit")
@@ -65,6 +80,7 @@ func ParseFlags(argv []string) (Config, error) {
 
 	return Config{
 		CgroupRoot:   *cgroupRoot,
+		KubepodsName: *kubepodsName,
 		NodeName:     *nodeName,
 		ResyncPeriod: *resyncPeriod,
 		RevertAll:    *revertAll,

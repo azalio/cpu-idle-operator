@@ -124,43 +124,25 @@ jobs:
       - name: Load agent image into kind
         run: kind load docker-image ghcr.io/azalio/cpi-idle-operator:latest --name cpi-idle-e2e
 
-      # Open Question 1 (.map/default/spec_default.md,
+      # Formerly Open Question 1 (.map/default/spec_default.md,
       # .map/wayfind/cpu-idle-operator/resolutions/T-012.md,
       # test/e2e/preflight_test.go): measured on kind v0.29.0 /
-      # kindest/node:v1.33.1, the agent's computed pod-cgroup path and the
-      # one kind's kubelet actually creates do NOT converge, because kind's
-      # own kubeadm config sets kubelet's cgroupRoot to "/kubelet". That is
-      # a documented, structural property of kind itself, not a flaky
-      # result -- so this specific, named failure does not block merge
-      # (blocking on it would mean no PR could ever merge again). Any OTHER
-      # preflight outcome does block: an unexpected pass means Open
-      # Question 1 has a new answer and this job's logic needs updating
-      # right along with README/spec; an unexpected failure reason means
-      # something is actually broken.
-      - name: Run cgroup-view pre-flight (documents Open Question 1)
-        run: |
-          set +o errexit
-          go test -tags e2e -v -run '^TestPreflightKindCgroupViewConsistency$' ./test/e2e/... 2>&1 | tee preflight.log
-          status="${PIPESTATUS[0]}"
-          set -o errexit
+      # kindest/node:v1.33.1, kind's own kubeadm config sets kubelet's
+      # cgroupRoot to "/kubelet", nesting the whole kubepods hierarchy one
+      # level deeper and prefixing every kubepods slice/directory name with
+      # "kubelet-". This is now closed: internal/cgroup.PodCgroupPath's
+      # kubepods name is configurable (--kubepods-name), so
+      # TestPreflightKindCgroupViewConsistency configures the agent's path
+      # computation to match kind's actual layout and must converge -- a
+      # blocking, non-negotiable check like every other preflight outcome.
+      - name: Run cgroup-view pre-flight (closed Open Question 1)
+        run: go test -tags e2e -v -run '^TestPreflightKindCgroupViewConsistency$' ./test/e2e/...
 
-          if [ "${status}" -eq 0 ]; then
-            echo "::notice::Pre-flight PASSED: Open Question 1 has converged on this kind image. Update README/spec/T-012.md -- the positive AC-10 scenario in test/e2e/e2e_test.go should now be treated as a required blocking check instead of the fail-safe fallback."
-            exit 0
-          fi
-          if grep -q 'OPEN QUESTION 1' preflight.log; then
-            echo "::warning::Pre-flight failed for the documented Open Question 1 reason (kind's kubeadm cgroupRoot nesting, see test/e2e/preflight_test.go) -- not treated as a merge blocker."
-            exit 0
-          fi
-          echo "::error::Pre-flight failed for an UNDOCUMENTED reason. Failing the build -- see preflight.log above."
-          exit 1
-        shell: bash
-
-      # This DOES block merge: whether or not Open Question 1's answer has
-      # changed, the DaemonSet built from config/base must always come up
-      # and behave safely on a real cluster (AC-6, INV-5) -- or, once
-      # convergence happens, apply and revert the idle tier for real
-      # (AC-10). See e2e_test.go's own doc comment for which branch runs.
+      # This DOES block merge: the DaemonSet built from config/base must
+      # come up and, patched only with kind's own --cgroup-root/
+      # --kubepods-name (never config/base's own defaults, which stay
+      # correct for a real production kubelet), actually apply and revert
+      # the idle tier for real (AC-10) -- see e2e_test.go's own doc comment.
       - name: Run kind e2e scenario
         run: go test -tags e2e -v -run '^TestKindApplyAndRevert$' ./test/e2e/...
 

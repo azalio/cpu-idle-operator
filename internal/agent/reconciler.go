@@ -39,13 +39,14 @@ type Applier interface {
 // an informer's cache (never a direct API call) and calls only the
 // already-built Applier for every write.
 type Reconciler struct {
-	lister     corelisters.PodLister
-	applier    Applier
-	cgroupRoot string
-	driver     cgroup.Driver
-	metrics    *observe.Metrics
-	node       string
-	logger     *slog.Logger
+	lister       corelisters.PodLister
+	applier      Applier
+	cgroupRoot   string
+	kubepodsName string
+	driver       cgroup.Driver
+	metrics      *observe.Metrics
+	node         string
+	logger       *slog.Logger
 
 	// podsInTierLabels is the label-set metrics.PodsInTier carried after
 	// the previous refreshPodsInTier pass. It exists purely so that pass
@@ -64,11 +65,12 @@ type Reconciler struct {
 }
 
 // NewReconciler builds a Reconciler that reconciles pods from lister's
-// cache against their cgroup state under cgroupRoot (using driver to
-// compute each pod's cgroup path), calling applier for every actual
-// convergence and reporting resync-caught drift on metrics.ResyncDriftTotal,
-// labeled as node.
-func NewReconciler(lister corelisters.PodLister, applier Applier, cgroupRoot string, driver cgroup.Driver, metrics *observe.Metrics, node string) *Reconciler {
+// cache against their cgroup state under cgroupRoot (using kubepodsName as
+// the top-level kubepods slice/directory name and driver as the cgroup
+// driver to compute each pod's cgroup path), calling applier for every
+// actual convergence and reporting resync-caught drift on
+// metrics.ResyncDriftTotal, labeled as node.
+func NewReconciler(lister corelisters.PodLister, applier Applier, cgroupRoot, kubepodsName string, driver cgroup.Driver, metrics *observe.Metrics, node string) *Reconciler {
 	if lister == nil {
 		panic("agent: NewReconciler: lister must not be nil")
 	}
@@ -77,6 +79,9 @@ func NewReconciler(lister corelisters.PodLister, applier Applier, cgroupRoot str
 	}
 	if cgroupRoot == "" {
 		panic("agent: NewReconciler: cgroupRoot must not be empty")
+	}
+	if kubepodsName == "" {
+		panic("agent: NewReconciler: kubepodsName must not be empty")
 	}
 	if !driver.Valid() {
 		panic(fmt.Sprintf("agent: NewReconciler: unknown driver %q", driver))
@@ -88,13 +93,14 @@ func NewReconciler(lister corelisters.PodLister, applier Applier, cgroupRoot str
 		panic("agent: NewReconciler: node must not be empty")
 	}
 	return &Reconciler{
-		lister:     lister,
-		applier:    applier,
-		cgroupRoot: cgroupRoot,
-		driver:     driver,
-		metrics:    metrics,
-		node:       node,
-		logger:     slog.Default(),
+		lister:       lister,
+		applier:      applier,
+		cgroupRoot:   cgroupRoot,
+		kubepodsName: kubepodsName,
+		driver:       driver,
+		metrics:      metrics,
+		node:         node,
+		logger:       slog.Default(),
 	}
 }
 
@@ -172,7 +178,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		r.logger.Warn(message, "pod", key)
 	}
 
-	dir, err := cgroup.PodCgroupPath(r.cgroupRoot, r.driver, qos.ToCgroupClass(desired.QoSClass), string(desired.UID))
+	dir, err := cgroup.PodCgroupPath(r.cgroupRoot, r.kubepodsName, r.driver, qos.ToCgroupClass(desired.QoSClass), string(desired.UID))
 	if err != nil {
 		return fmt.Errorf("agent: reconcile: pod cgroup path: %w", err)
 	}

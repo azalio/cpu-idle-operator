@@ -99,7 +99,7 @@ func TestVC1RevertAllClearsNode(t *testing.T) {
 
 		client := fake.NewSimpleClientset(idlePod, burstPod, bothPod)
 
-		cfg := config.Config{NodeName: "node-a", CgroupRoot: root}
+		cfg := config.Config{NodeName: "node-a", CgroupRoot: root, KubepodsName: cgroup.DefaultKubepodsName}
 		var out bytes.Buffer
 		opts := RevertAllOptions{
 			Client:        client,
@@ -196,7 +196,7 @@ func TestVC2PartialFailureNonzeroExit(t *testing.T) {
 			failErr:   errors.New("simulated write failure"),
 		}
 
-		cfg := config.Config{NodeName: "node-a", CgroupRoot: root}
+		cfg := config.Config{NodeName: "node-a", CgroupRoot: root, KubepodsName: cgroup.DefaultKubepodsName}
 		opts := RevertAllOptions{
 			Client:    client,
 			GateCheck: fixedReadyGate(cgroup.DriverCgroupfs),
@@ -250,10 +250,11 @@ func TestVC3RevertAllIsOneshot(t *testing.T) {
 		healthAddr := freeAddr(t)
 
 		cfg := config.Config{
-			NodeName:    "node-a",
-			CgroupRoot:  root,
-			MetricsAddr: metricsAddr,
-			HealthAddr:  healthAddr,
+			NodeName:     "node-a",
+			CgroupRoot:   root,
+			KubepodsName: cgroup.DefaultKubepodsName,
+			MetricsAddr:  metricsAddr,
+			HealthAddr:   healthAddr,
 		}
 		opts := RevertAllOptions{
 			Client:    client,

@@ -61,7 +61,7 @@ func testPod(uid, name, namespace string, annos map[string]string) *corev1.Pod {
 // sleep.
 func seedIdlePodCgroup(t *testing.T, root string, uid string) {
 	t.Helper()
-	dir, err := cgroup.PodCgroupPath(root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid)
+	dir, err := cgroup.PodCgroupPath(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid)
 	if err != nil {
 		t.Fatalf("PodCgroupPath: %v", err)
 	}
@@ -98,7 +98,7 @@ func mustListen(t *testing.T) net.Listener {
 // without a real cgroup v2 mount underneath it (see
 // agent.GateCheckFunc's doc comment for why this indirection exists).
 func fixedReadyGate(driver cgroup.Driver) agent.GateCheckFunc {
-	return func(string, envgate.UnameFunc) (envgate.Result, error) {
+	return func(string, string, envgate.UnameFunc) (envgate.Result, error) {
 		return envgate.Result{Ready: true, Reason: envgate.ReasonOK, Driver: driver}, nil
 	}
 }
@@ -221,6 +221,7 @@ func TestVC1V1NodeStaysNotReady(t *testing.T) {
 			Client: client,
 			Config: config.Config{
 				CgroupRoot:   root,
+				KubepodsName: cgroup.DefaultKubepodsName,
 				NodeName:     "node-a",
 				ResyncPeriod: time.Hour,
 				MetricsAddr:  metricsListener.Addr().String(),
@@ -291,6 +292,7 @@ func TestVC3ShutdownWritesNothing(t *testing.T) {
 			Client: client,
 			Config: config.Config{
 				CgroupRoot:   root,
+				KubepodsName: cgroup.DefaultKubepodsName,
 				NodeName:     "node-a",
 				ResyncPeriod: time.Hour,
 				MetricsAddr:  metricsListener.Addr().String(),
@@ -388,6 +390,7 @@ func TestVC4ReadinessAfterCacheSync(t *testing.T) {
 			Client: client,
 			Config: config.Config{
 				CgroupRoot:   t.TempDir(),
+				KubepodsName: cgroup.DefaultKubepodsName,
 				NodeName:     "node-a",
 				ResyncPeriod: time.Hour,
 				MetricsAddr:  metricsListener.Addr().String(),

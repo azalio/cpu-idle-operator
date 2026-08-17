@@ -47,13 +47,13 @@ func (a *Applier) Revert(ctx context.Context, pod *corev1.Pod, state Snapshot) e
 		return err
 	}
 
-	dir, err := cgroup.PodCgroupPath(a.cgroupRoot, a.driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
+	dir, err := cgroup.PodCgroupPath(a.cgroupRoot, a.kubepodsName, a.driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
 	if err != nil {
 		return fmt.Errorf("apply: revert: pod cgroup path: %w", err)
 	}
 
 	for _, write := range revertPlan(pod, state) {
-		writeErr := a.writer.WriteKnob(a.cgroupRoot, dir, write.Knob, write.Value)
+		writeErr := a.writer.WriteKnob(a.cgroupRoot, a.kubepodsName, dir, write.Knob, write.Value)
 		switch {
 		case writeErr == nil:
 			a.recorder.Reverted(pod, write.Knob, string(observe.TierApplyResultReverted), string(observe.TierApplyReasonOK))

@@ -21,29 +21,31 @@ import (
 )
 
 // Writer is the cgroup knob-write operation Applier depends on. Its method
-// signature matches cgroup.WriteKnob exactly (root, dir, name, value). It
-// exists as an interface — Applier never calls cgroup.WriteKnob directly —
-// so a test can substitute a journaling fake and assert on the *sequence*
-// of calls (AC-13), which asserting against a real filesystem's final
-// contents cannot expose no matter what order the plan executed them in.
+// signature matches cgroup.WriteKnob exactly (root, kubepodsName, dir, name,
+// value). It exists as an interface — Applier never calls cgroup.WriteKnob
+// directly — so a test can substitute a journaling fake and assert on the
+// *sequence* of calls (AC-13), which asserting against a real filesystem's
+// final contents cannot expose no matter what order the plan executed them
+// in.
 type Writer interface {
-	WriteKnob(root, dir, name, value string) error
+	WriteKnob(root, kubepodsName, dir, name, value string) error
 }
 
 // cgroupWriter adapts the cgroup package's free WriteKnob function to the
 // Writer interface; it is Applier's writer in production.
 type cgroupWriter struct{}
 
-func (cgroupWriter) WriteKnob(root, dir, name, value string) error {
-	return cgroup.WriteKnob(root, dir, name, value)
+func (cgroupWriter) WriteKnob(root, kubepodsName, dir, name, value string) error {
+	return cgroup.WriteKnob(root, kubepodsName, dir, name, value)
 }
 
 // Applier applies and reverts CPU tiers on a single pod's cgroup.
 type Applier struct {
-	cgroupRoot string
-	driver     cgroup.Driver
-	writer     Writer
-	recorder   *observe.Recorder
+	cgroupRoot   string
+	kubepodsName string
+	driver       cgroup.Driver
+	writer       Writer
+	recorder     *observe.Recorder
 	// events fires the annotation-level Events that are not a knob-write
 	// outcome at all (an unrecognized tier value — AC-16), so they must not
 	// go through recorder's write-outcome pairing (CCR-1 pairs a metric
@@ -55,13 +57,17 @@ type Applier struct {
 }
 
 // NewApplier builds an Applier that writes cgroup knobs under cgroupRoot
-// using driver, reporting write outcomes through recorder and
-// annotation-level notices through events. cgroupRoot and driver come from
-// the agent's configuration and the environment gate's decision
-// respectively — Applier never detects either itself.
-func NewApplier(cgroupRoot string, driver cgroup.Driver, recorder *observe.Recorder, events *observe.EventRecorder) *Applier {
+// (using kubepodsName as the top-level kubepods slice/directory name and
+// driver as the cgroup driver), reporting write outcomes through recorder
+// and annotation-level notices through events. cgroupRoot, kubepodsName and
+// driver come from the agent's configuration and the environment gate's
+// decision respectively — Applier never detects any of them itself.
+func NewApplier(cgroupRoot, kubepodsName string, driver cgroup.Driver, recorder *observe.Recorder, events *observe.EventRecorder) *Applier {
 	if cgroupRoot == "" {
 		panic("apply: NewApplier: cgroupRoot must not be empty")
+	}
+	if kubepodsName == "" {
+		panic("apply: NewApplier: kubepodsName must not be empty")
 	}
 	if !driver.Valid() {
 		panic(fmt.Sprintf("apply: NewApplier: unknown driver %q", driver))
@@ -73,11 +79,12 @@ func NewApplier(cgroupRoot string, driver cgroup.Driver, recorder *observe.Recor
 		panic("apply: NewApplier: events must not be nil")
 	}
 	return &Applier{
-		cgroupRoot: cgroupRoot,
-		driver:     driver,
-		writer:     cgroupWriter{},
-		recorder:   recorder,
-		events:     events,
+		cgroupRoot:   cgroupRoot,
+		kubepodsName: kubepodsName,
+		driver:       driver,
+		writer:       cgroupWriter{},
+		recorder:     recorder,
+		events:       events,
 	}
 }
 
@@ -105,7 +112,7 @@ func (a *Applier) Apply(ctx context.Context, pod *corev1.Pod) error {
 	desired, notes := tier.Desired(pod)
 	a.reportNotes(pod, notes)
 
-	dir, err := cgroup.PodCgroupPath(a.cgroupRoot, a.driver, qos.ToCgroupClass(desired.QoSClass), string(desired.UID))
+	dir, err := cgroup.PodCgroupPath(a.cgroupRoot, a.kubepodsName, a.driver, qos.ToCgroupClass(desired.QoSClass), string(desired.UID))
 	if err != nil {
 		return fmt.Errorf("apply: pod cgroup path: %w", err)
 	}
@@ -120,7 +127,7 @@ func (a *Applier) Apply(ctx context.Context, pod *corev1.Pod) error {
 
 	plan := BuildPlan(desired, snapshot, qos.RestoreWeight(pod.Spec))
 	for _, write := range plan {
-		writeErr := a.writer.WriteKnob(a.cgroupRoot, dir, write.Knob, write.Value)
+		writeErr := a.writer.WriteKnob(a.cgroupRoot, a.kubepodsName, dir, write.Knob, write.Value)
 		switch {
 		case writeErr == nil:
 			a.reportSuccess(pod, write)

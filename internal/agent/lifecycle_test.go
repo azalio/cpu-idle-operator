@@ -36,7 +36,7 @@ func mustListen(t *testing.T) net.Listener {
 // environment gate as passed, so this test never depends on a real cgroup
 // v2 mount underneath it (see GateCheckFunc's doc comment).
 func fixedReadyGate(driver cgroup.Driver) GateCheckFunc {
-	return func(string, envgate.UnameFunc) (envgate.Result, error) {
+	return func(string, string, envgate.UnameFunc) (envgate.Result, error) {
 		return envgate.Result{Ready: true, Reason: envgate.ReasonOK, Driver: driver}, nil
 	}
 }
@@ -110,6 +110,7 @@ func TestVC2RestartConvergesStopChangesNothing(t *testing.T) {
 				Client: client,
 				Config: config.Config{
 					CgroupRoot:   root,
+					KubepodsName: cgroup.DefaultKubepodsName,
 					NodeName:     "node-a",
 					ResyncPeriod: time.Hour,
 					MetricsAddr:  metricsListener.Addr().String(),

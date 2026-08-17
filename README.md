@@ -89,6 +89,29 @@ On any unsupported node the agent stays alive, reports not-ready with the
 specific reason, and never touches a cgroup file — it does not crash-loop
 and it does not guess.
 
+### Non-default kubelet `--cgroup-root`
+
+`config/base/daemonset.yaml` ships `--cgroup-root=/sys/fs/cgroup` with the
+top-level kubepods cgroup left at its default name, `kubepods` — correct
+for a stock kubelet. Some clusters run kubelet with a non-default
+`--cgroup-root` of their own (for example, `kind`'s kubeadm config sets it
+to `/kubelet`), which nests the whole kubepods hierarchy one level deeper
+and prefixes every kubepods slice/directory name with that root's own
+basename (`kubelet-kubepods` on `kind`, measured directly on a kind node —
+see `test/e2e/preflight_test.go`).
+
+For a cluster shaped like that, pass both `--cgroup-root` (pointed at the
+kubelet root's own cgroup directory) and `--kubepods-name` (the prefixed
+kubepods name) so the agent's computed pod-cgroup path matches what that
+kubelet actually creates. On `kind`, that pairing is
+`--cgroup-root=/sys/fs/cgroup/kubelet.slice --kubepods-name=kubelet-kubepods`
+— exactly what `test/e2e`'s own suite configures the DaemonSet with to
+exercise the positive AC-10 scenario for real (see
+[Testing: what's actually gated, and what isn't](#testing-whats-actually-gated-and-what-isnt)
+below). Do not change `config/base/daemonset.yaml`'s own defaults for this:
+they are correct for a real production kubelet, and a `kind`-shaped
+override there would break every other cluster.
+
 ## VPA and in-place resize: excluded, not merely discouraged
 
 **A pod carrying either tier is excluded from `VerticalPodAutoscaler`
@@ -178,22 +201,30 @@ cleared, and both tiers coexisting on one pod cgroup without conflict.
 
 Unit tests and `go vet` gate every merge. So does an e2e suite against a
 real [`kind`](https://kind.sigs.k8s.io/) cluster with a real DaemonSet
-from `config/base` — but it does not prove the agent applies a tier on
-`kind`, because it can't: `kind` sets kubelet's `cgroupRoot` to
-`/kubelet`, so pods land under `kubelet.slice/kubelet-kubepods…`, not the
-plain `kubepods.slice` this agent expects at its default
-`--cgroup-root`. That mismatch was an open question; it's now closed by
-running it, not by reasoning about it.
+from `config/base`, and it does prove the agent applies and reverts a tier
+on `kind`, for real: `kind` sets kubelet's `cgroupRoot` to `/kubelet`, so
+pods land under `kubelet.slice/kubelet-kubepods…`, not the plain
+`kubepods.slice` this agent expects at its default `--cgroup-root`. That
+mismatch was an open question; it's closed — not by reasoning about it, but
+by measuring the exact divergent layout on a live node and making the
+top-level kubepods cgroup name configurable (`--kubepods-name`, see
+[Non-default kubelet `--cgroup-root`](#non-default-kubelet---cgroup-root)
+above) so the agent can be pointed at it.
 
-What the e2e suite gates instead is the fail-safe path: on a `kind` node,
-the agent's own preflight check correctly reports itself not ready, with
-the specific reason, and performs zero cgroup writes against a live
-annotated pod. That behavior is real and blocking. The positive path —
-an agent actually setting `cpu.idle` or `cpu.max.burst` on a live pod
-cgroup under a real `kubelet` — is not something `kind` can currently
-exercise, and this README says so rather than leaving it implied by an
-e2e suite that's green for an unrelated reason. That path is covered
-instead by `hack/stand-probe.sh` against a real node.
+`test/e2e`'s suite deploys `config/base`'s unmodified manifests, then
+patches only the deployed DaemonSet's `--cgroup-root`/`--kubepods-name`
+arguments for this `kind`-only reason (`config/base/daemonset.yaml` itself
+never carries either override — its defaults stay correct for a real
+production kubelet). A dedicated pre-flight test
+(`TestPreflightKindCgroupViewConsistency`) proves, before anything else
+runs, that the agent's computed pod-cgroup path converges with the path
+`kind`'s kubelet actually creates; the main scenario
+(`TestKindApplyAndRevert`) then applies the idle tier through the live
+DaemonSet, reads `cpu.idle=1` back from the node's real cgroupfs, removes
+the annotation, and confirms both `cpu.idle=0` and the restored
+request-derived `cpu.weight`. Both are required, merge-blocking checks. The
+same positive path is also covered independently by `hack/stand-probe.sh`
+against a real node with a stock kubelet configuration.
 
 ## License
 

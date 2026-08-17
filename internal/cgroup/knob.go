@@ -54,12 +54,13 @@ func ReadKnob(dir, name string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// WriteKnob writes value to the knob file dir/name. root is the caller's
-// configured cgroup root (e.g. config.Config.CgroupRoot) — the same value
-// passed to PodCgroupPath to compute dir in the first place. WriteKnob
-// requires it explicitly, rather than inferring a root from dir itself, so
-// the write-target guard cannot be fooled by a directory shaped like a
-// second, fake pod cgroup nested inside a real one (see guardWriteTarget).
+// WriteKnob writes value to the knob file dir/name. root and kubepodsName
+// are the caller's configured cgroup root and kubepods name (e.g.
+// config.Config.CgroupRoot / KubepodsName) — the same values passed to
+// PodCgroupPath to compute dir in the first place. WriteKnob requires them
+// explicitly, rather than inferring them from dir itself, so the
+// write-target guard cannot be fooled by a directory shaped like a second,
+// fake pod cgroup nested inside a real one (see guardWriteTarget).
 //
 // Close errors take priority over a deferred Write error: the kernel can
 // accept the write() syscall on a cgroup knob and only reject the value
@@ -69,8 +70,8 @@ func ReadKnob(dir, name string) (string, error) {
 // Close and Write error paths preserve the underlying error chain, so
 // callers can still do errors.Is(err, syscall.EINVAL) to distinguish a
 // kernel-rejected value from any other failure.
-func WriteKnob(root, dir, name, value string) error {
-	if err := guardWriteTarget(dir, root); err != nil {
+func WriteKnob(root, kubepodsName, dir, name, value string) error {
+	if err := guardWriteTarget(dir, root, kubepodsName); err != nil {
 		return err
 	}
 
@@ -95,13 +96,13 @@ func WriteKnob(root, dir, name, value string) error {
 }
 
 // extractPodUID recovers the pod UID that PodCgroupPath would need to
-// produce base as the final path component for driver/qos, or reports
-// ok=false if base does not even have that shape. This is only a candidate
-// generator: guardWriteTarget still recomputes the full path with
+// produce base as the final path component for driver/qos/kubepodsName, or
+// reports ok=false if base does not even have that shape. This is only a
+// candidate generator: guardWriteTarget still recomputes the full path with
 // PodCgroupPath against the caller-supplied root and requires an exact
 // match, so a wrong or malformed uid here cannot cause a false accept — it
 // just fails to reconstruct.
-func extractPodUID(base string, driver Driver, qos QoSClass) (uid string, ok bool) {
+func extractPodUID(base string, driver Driver, qos QoSClass, kubepodsName string) (uid string, ok bool) {
 	switch driver {
 	case DriverCgroupfs:
 		const prefix = "pod"
@@ -110,7 +111,7 @@ func extractPodUID(base string, driver Driver, qos QoSClass) (uid string, ok boo
 		}
 		return strings.TrimPrefix(base, prefix), true
 	case DriverSystemd:
-		prefix := "kubepods-"
+		prefix := kubepodsName + "-"
 		if qos != QoSGuaranteed {
 			prefix += string(qos) + "-"
 		}
@@ -147,7 +148,12 @@ func extractPodUID(base string, driver Driver, qos QoSClass) (uid string, ok boo
 // root to the caller-supplied value closes that hole: PodCgroupPath(root,
 // ...) is fully determined before dir is even inspected, so nesting one
 // pod-shaped path inside another can never reconstruct to match.
-func guardWriteTarget(dir, root string) error {
+//
+// kubepodsName is likewise always the caller's configured kubepods name,
+// for the same reason: it is what extractPodUID's systemd-driver prefix and
+// PodCgroupPath's own reconstruction both key off, so it must come from the
+// caller's own configuration, never be guessed from dir.
+func guardWriteTarget(dir, root, kubepodsName string) error {
 	clean := filepath.Clean(dir)
 	if !filepath.IsAbs(clean) {
 		return fmt.Errorf("%w: %s is not an absolute path", ErrNotPodCgroup, dir)
@@ -157,12 +163,12 @@ func guardWriteTarget(dir, root string) error {
 	base := filepath.Base(clean)
 	for _, driver := range [...]Driver{DriverSystemd, DriverCgroupfs} {
 		for _, qos := range [...]QoSClass{QoSGuaranteed, QoSBurstable, QoSBestEffort} {
-			uid, ok := extractPodUID(base, driver, qos)
+			uid, ok := extractPodUID(base, driver, qos, kubepodsName)
 			if !ok {
 				continue
 			}
 
-			want, err := PodCgroupPath(cleanRoot, driver, qos, uid)
+			want, err := PodCgroupPath(cleanRoot, kubepodsName, driver, qos, uid)
 			if err == nil && filepath.Clean(want) == clean {
 				return nil
 			}

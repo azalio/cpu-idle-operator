@@ -48,7 +48,7 @@ const shutdownTimeout = 10 * time.Second
 // a passing cgroup v2 mount (its statfs-mocking hook is an unexported
 // package variable). This package's own tests only need to prove what
 // Lifecycle does with a given decision, not re-derive the decision itself.
-type GateCheckFunc func(root string, uname envgate.UnameFunc) (envgate.Result, error)
+type GateCheckFunc func(root, kubepodsName string, uname envgate.UnameFunc) (envgate.Result, error)
 
 // Lifecycle owns cmd/agent's full startup and shutdown sequence: flag
 // parsing happens in the caller (config.ParseFlags), but everything after
@@ -128,7 +128,7 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 		return errors.New("agent: Lifecycle.Run: Config.NodeName must not be empty")
 	}
 
-	gateResult, err := lc.gateCheck()(lc.Config.CgroupRoot, lc.uname())
+	gateResult, err := lc.gateCheck()(lc.Config.CgroupRoot, lc.Config.KubepodsName, lc.uname())
 	if err != nil {
 		return fmt.Errorf("agent: environment gate check: %w", err)
 	}
@@ -157,7 +157,7 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 
 		applier = lc.Applier
 		if applier == nil {
-			applier = apply.NewApplier(lc.Config.CgroupRoot, gateResult.Driver, recorder, observe.NewEventRecorder(eventRecorder))
+			applier = apply.NewApplier(lc.Config.CgroupRoot, lc.Config.KubepodsName, gateResult.Driver, recorder, observe.NewEventRecorder(eventRecorder))
 		}
 	} else {
 		// Intent: EnvironmentGateInfo's own doc comment says the series is
@@ -190,7 +190,7 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 
 	var runErr error
 	if gateResult.Ready {
-		reconciler := NewReconciler(informer.Lister(), applier, lc.Config.CgroupRoot, gateResult.Driver, metrics, lc.Config.NodeName)
+		reconciler := NewReconciler(informer.Lister(), applier, lc.Config.CgroupRoot, lc.Config.KubepodsName, gateResult.Driver, metrics, lc.Config.NodeName)
 		runErr = lc.runReady(ctx, informer, reconciler, health)
 	} else {
 		runErr = lc.runDegraded(ctx, informer, observe.NewEventRecorder(eventRecorder))

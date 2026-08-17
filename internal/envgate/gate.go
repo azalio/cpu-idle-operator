@@ -72,18 +72,21 @@ var statfsType = func(path string) (int64, error) {
 // statfs call) and calls uname; it never writes under root and never calls
 // os.Exit. Callers must not perform any cgroup write when the returned
 // Result.Ready is false — Check itself performs zero writes regardless of
-// its decision.
+// its decision. kubepodsName is the top-level kubepods slice/directory name
+// this check looks for under root (cgroup.DefaultKubepodsName for a stock
+// kubelet; a kubelet-root-prefixed name, e.g. "kubelet-kubepods" on kind,
+// for a kubelet started with a non-default --cgroup-root).
 //
 // The non-nil error return is reserved for uname itself failing or
 // returning a release string Check cannot parse at all; every filesystem
 // outcome Check can classify is reported through Result.Reason instead, so
 // a caller can always log and expose a decision without a crash loop.
-func Check(root string, uname UnameFunc) (Result, error) {
+func Check(root, kubepodsName string, uname UnameFunc) (Result, error) {
 	if reason := cgroupVersionReason(root); reason != ReasonOK {
 		return Result{Ready: false, Reason: reason}, nil
 	}
 
-	driver, reason := detectDriver(root)
+	driver, reason := detectDriver(root, kubepodsName)
 	if reason != ReasonOK {
 		return Result{Ready: false, Reason: reason}, nil
 	}
@@ -141,14 +144,15 @@ func cgroupVersionReason(root string) Reason {
 }
 
 // detectDriver classifies the kubepods cgroup driver from the v2 paths
-// kubelet creates under root. It must only run after cgroupVersionReason
-// has already confirmed root is clean v2: the v1-era heuristic of looking
-// for <root>/cpu/kubepods.slice does not apply here and must not be
-// reintroduced (see resolution T-002 review note: a clean v2 node never has
-// a cpu/ directory at all).
-func detectDriver(root string) (cgroup.Driver, Reason) {
-	hasSystemd := dirExists(filepath.Join(root, "kubepods.slice"))
-	hasCgroupfs := dirExists(filepath.Join(root, "kubepods"))
+// kubelet creates under root, using kubepodsName as the top-level
+// slice/directory name (see Check's doc comment). It must only run after
+// cgroupVersionReason has already confirmed root is clean v2: the v1-era
+// heuristic of looking for <root>/cpu/kubepods.slice does not apply here and
+// must not be reintroduced (see resolution T-002 review note: a clean v2
+// node never has a cpu/ directory at all).
+func detectDriver(root, kubepodsName string) (cgroup.Driver, Reason) {
+	hasSystemd := dirExists(filepath.Join(root, kubepodsName+".slice"))
+	hasCgroupfs := dirExists(filepath.Join(root, kubepodsName))
 
 	switch {
 	case hasSystemd && !hasCgroupfs:

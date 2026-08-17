@@ -111,7 +111,7 @@ func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions)
 		out = os.Stdout
 	}
 
-	gateResult, err := revertAllGateCheck(opts)(cfg.CgroupRoot, revertAllUname(opts))
+	gateResult, err := revertAllGateCheck(opts)(cfg.CgroupRoot, cfg.KubepodsName, revertAllUname(opts))
 	if err != nil {
 		return fmt.Errorf("agent: revert-all: environment gate check: %w", err)
 	}
@@ -132,7 +132,7 @@ func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions)
 	results := make([]revertResult, 0, len(pods))
 	failures := 0
 	for i := range pods {
-		result := revertPod(ctx, applier, cfg.CgroupRoot, gateResult.Driver, &pods[i])
+		result := revertPod(ctx, applier, cfg.CgroupRoot, cfg.KubepodsName, gateResult.Driver, &pods[i])
 		if result.err != nil {
 			failures++
 			logger.Error("agent: revert-all: pod revert failed", "pod", result.key, "error", result.err)
@@ -180,7 +180,7 @@ func defaultRevertAllApplier(cfg config.Config, driver cgroup.Driver, opts Rever
 	}
 	registry := prometheus.NewRegistry()
 	recorder := observe.NewRecorder(registry, eventRecorder, cfg.NodeName)
-	return apply.NewApplier(cfg.CgroupRoot, driver, recorder, observe.NewEventRecorder(eventRecorder))
+	return apply.NewApplier(cfg.CgroupRoot, cfg.KubepodsName, driver, recorder, observe.NewEventRecorder(eventRecorder))
 }
 
 // listNodePods lists nodeName's pods with a single call, scoped
@@ -226,10 +226,10 @@ type revertResult struct {
 // the pod's tier annotation, so a pod whose annotation was already removed
 // but whose cgroup was never reverted — the exact gap this mode exists to
 // close — is still caught.
-func revertPod(ctx context.Context, applier Applier, cgroupRoot string, driver cgroup.Driver, pod *corev1.Pod) revertResult {
+func revertPod(ctx context.Context, applier Applier, cgroupRoot, kubepodsName string, driver cgroup.Driver, pod *corev1.Pod) revertResult {
 	result := revertResult{key: pod.Namespace + "/" + pod.Name}
 
-	dir, err := cgroup.PodCgroupPath(cgroupRoot, driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
+	dir, err := cgroup.PodCgroupPath(cgroupRoot, kubepodsName, driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
 	if err != nil {
 		result.status = "error"
 		result.err = fmt.Errorf("pod cgroup path: %w", err)

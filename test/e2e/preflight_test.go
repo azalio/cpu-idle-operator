@@ -9,54 +9,45 @@ import (
 )
 
 // TestPreflightKindCgroupViewConsistency is the mandatory first e2e check
-// (VC2): does the pod-cgroup path this agent computes from
-// config/base's own default --cgroup-root match the path kubelet actually
-// creates, as seen directly inside the kind node container? Every other
-// assertion in this package depends on the answer, so this test is meant
-// to be read start to finish when it fails.
+// (VC2): does the pod-cgroup path this agent computes for kind's own
+// configuration (kindCgroupRoot/kindKubepodsName, see helpers.go) match the
+// path kubelet actually creates, as seen directly inside the kind node
+// container? TestKindApplyAndRevert's positive AC-10 scenario depends on
+// this converging, so this test is meant to be read start to finish when
+// it fails.
 //
-// # Measured answer (kind v0.29.0, kindest/node:v1.33.1, checked 2026-08-17)
+// # Formerly Open Question 1 (now closed)
 //
-// No, it does not converge. kind's own kubeadm config sets the
-// control-plane kubelet's KubeletConfiguration.cgroupRoot to "/kubelet"
-// (confirmed by reading /var/lib/kubelet/config.yaml inside the node
-// container), which nests the entire kubepods hierarchy one level deeper
-// and prefixes every intermediate slice component with "kubelet-":
+// kind's own kubeadm config sets the control-plane kubelet's
+// KubeletConfiguration.cgroupRoot to "/kubelet" (confirmed by reading
+// /var/lib/kubelet/config.yaml inside the node container), which nests the
+// entire kubepods hierarchy one level deeper and prefixes every
+// intermediate slice component with "kubelet-":
 //
-//	agent-computed (prodCgroupRoot, production's own default):
+//	config/base's own production defaults (never converge on kind):
 //	  /sys/fs/cgroup/kubepods.slice/kubepods-<qos>.slice/kubepods-<qos>-pod<uid>.slice
 //	actually created by kind's kubelet on the node:
 //	  /sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-<qos>.slice/kubelet-kubepods-<qos>-pod<uid>.slice
 //
 // This is not a bind-mount visibility problem: the divergence is visible
 // directly inside the kind node container itself, with no pod or hostPath
-// mount involved at all. The extraMounts recommendation carried over from
-// earlier research (see
-// .map/wayfind/cpu-idle-operator/resolutions/T-012.md) therefore does not
-// apply to the actual failure mode found here and was deliberately left
-// out of kind-config.yaml — bind-mounting /sys/fs/cgroup differently would
-// not change kubelet's slice naming at all.
+// mount involved at all — see kind-config.yaml's own doc comment for why no
+// extraMounts workaround was ever applied here.
 //
-// Deployed for real as config/base's own DaemonSet in this same
-// environment, the agent's own internal/envgate.Check independently
-// reaches the identical conclusion at runtime: Ready=false,
-// Reason=kubepods_missing (see TestKindApplyAndRevert, which asserts this
-// from the live pod's logs).
-//
-// # Open Question 1
-//
-// This divergence is the spec's Open Question 1
-// (.map/default/spec_default.md) and the reason ST-013 was marked
-// provisional. Per the decision recorded there and in T-012.md, a failure
-// here does NOT fail the subtask: the blocking kind e2e gate is replaced
-// by the fail-safe assertions TestKindApplyAndRevert runs instead of the
-// positive tier-apply/revert scenario, and AC-10's positive scenario stays
-// covered by hack/stand-probe.sh on a real node (already measured there,
-// see resolutions/T-005.md). CI treats exactly this documented failure as
-// non-blocking — see .github/workflows/ci.yaml's e2e job — while still
-// failing the build on any other preflight outcome, including this test
-// unexpectedly passing (which would mean Open Question 1 has a new answer
-// and the positive scenario should be turned back on as a merge blocker).
+// This used to be the spec's Open Question 1
+// (.map/default/spec_default.md, .map/wayfind/cpu-idle-operator/resolutions/T-012.md):
+// production's own defaults cannot be made to match kind's kubelet layout,
+// full stop. It is closed not by changing config/base (which must keep
+// shipping the defaults that are correct for a real production kubelet —
+// see README's Supported Environments section) but by making the top-level
+// kubepods cgroup name configurable (--kubepods-name): pointed at
+// kindCgroupRoot with kindKubepodsName, the agent's own
+// cgroup.PodCgroupPath computes exactly the path measured above, with no
+// double-counted "kubelet.slice" component (internal/cgroup/path_test.go's
+// own TestVC5KindMeasuredPathNoDoubleRoot proves this in isolation, without
+// a live cluster). This test proves it converges against the real kind
+// node, not just in a unit test fixture. Measured on kind v0.29.0,
+// kindest/node:v1.33.1.
 func TestPreflightKindCgroupViewConsistency(t *testing.T) {
 	clientset := kubeClient(t)
 	requireNodeReachable(t)
@@ -68,16 +59,14 @@ func TestPreflightKindCgroupViewConsistency(t *testing.T) {
 	pod := applyProbePod(t, ctx, clientset, ns, "preflight-probe", "500m", nil)
 	pod = waitForPod(t, ctx, clientset, ns, pod.Name, podReadyTimeout, isPodReady)
 
-	agentPath := computeAgentPath(t, cgroup.QoSBurstable, string(pod.UID))
+	agentPath := computeAgentPath(t, kindCgroupRoot, kindKubepodsName, cgroup.QoSBurstable, string(pod.UID))
 	if nodePathExists(agentPath) {
-		t.Logf("cgroup view converged: %s exists on the node -- Open Question 1 now answers YES on this kind image; "+
-			"TestKindApplyAndRevert's positive apply/revert branch should now be running instead of the fail-safe branch.",
-			agentPath)
+		t.Logf("cgroup view converged: %s exists on the node, using kindCgroupRoot/kindKubepodsName", agentPath)
 		return
 	}
 
 	realPath := findNodePath(escapeUID(string(pod.UID)))
-	t.Fatalf(`OPEN QUESTION 1: kind's cgroup view does NOT match the agent's computed path.
+	t.Fatalf(`kind's cgroup view does NOT match the agent's computed path, even with kindCgroupRoot/kindKubepodsName.
 
 agent-computed path (does not exist on the node):
   %s
@@ -85,13 +74,11 @@ agent-computed path (does not exist on the node):
 actual path kubelet created on the node:
   %s
 
-This is the spec's Open Question 1 (.map/default/spec_default.md): kind's
-own kubeadm config nests kubepods under a "kubelet.slice/kubelet-kubepods..."
-prefix instead of the plain "kubepods.slice/..." layout a production
-kubelet (default cgroupRoot) produces. See this test's doc comment for the
-full measurement and .map/wayfind/cpu-idle-operator/resolutions/T-012.md
-for the decision this failure triggers: the kind e2e gate is replaced by
-TestKindApplyAndRevert's fail-safe assertions plus hack/stand-probe.sh on a
-real node -- not by patching kind's kubeadm config to work around it.`,
+This is a regression: either this kind image changed its kubelet cgroup
+layout again (update kindCgroupRoot/kindKubepodsName in helpers.go and this
+doc comment to match), or internal/cgroup.PodCgroupPath's systemd-driver
+double-root fix (path.go's systemdPodCgroupPath) broke. See
+internal/cgroup/path_test.go's TestVC5KindMeasuredPathNoDoubleRoot for the
+isolated unit-test proof this is meant to match.`,
 		agentPath, realPath)
 }

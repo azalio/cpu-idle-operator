@@ -59,7 +59,7 @@ func TestVC1RevertRestoresMeasuredPair(t *testing.T) {
 		pod := testPodWithCPURequest(uid, "500m")
 		state := Snapshot{IdleActive: true, Weight: 1, HasQuota: true, Quota: 100000, Burst: 0}
 		recorder, events, _, _ := newTestObservers("node-a")
-		applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 		if err := applier.Revert(context.Background(), pod, state); err != nil {
 			t.Fatalf("Revert() error = %v", err)
@@ -184,7 +184,7 @@ func TestVC3RequestChangedWhileIdle(t *testing.T) {
 		pod := testPodWithCPURequest(uid, "2")
 		state := Snapshot{IdleActive: true, Weight: 1, HasQuota: false, Burst: 0}
 		recorder, events, _, _ := newTestObservers("node-a")
-		applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 		if err := applier.Revert(context.Background(), pod, state); err != nil {
 			t.Fatalf("Revert() error = %v", err)
@@ -239,7 +239,7 @@ func TestVC3RepeatedRevertUsesLiveSpec(t *testing.T) {
 
 		state := Snapshot{IdleActive: true, Weight: 1, HasQuota: true, Quota: 100000, Burst: 0}
 		recorder, events, _, _ := newTestObservers("node-a")
-		applier := NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
 		podFirst := testPodWithCPURequest(uid, "500m")
 		if err := applier.Revert(context.Background(), podFirst, state); err != nil {

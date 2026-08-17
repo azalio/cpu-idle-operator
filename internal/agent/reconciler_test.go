@@ -84,7 +84,7 @@ func testPod(uid, cpuLimit string, annos map[string]string) *corev1.Pod {
 // returns dir so a test can assert file content against it directly.
 func seedPodCgroup(t *testing.T, root string, driver cgroup.Driver, qosClass cgroup.QoSClass, uid string, idle, weight, max, burst string) string {
 	t.Helper()
-	dir, err := cgroup.PodCgroupPath(root, driver, qosClass, uid)
+	dir, err := cgroup.PodCgroupPath(root, cgroup.DefaultKubepodsName, driver, qosClass, uid)
 	if err != nil {
 		t.Fatalf("PodCgroupPath: %v", err)
 	}
@@ -161,9 +161,9 @@ func TestVC1AnnotatedPodGetsIdle(t *testing.T) {
 		client := fake.NewSimpleClientset(pod)
 		informer := NewInformer(client, "node-a", time.Hour)
 		recorder, events := newTestObservers("node-a")
-		applier := apply.NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(informer.Lister(), applier, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(informer.Lister(), applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -203,9 +203,9 @@ func TestVC2LivePodAnnotationAddAndRemove(t *testing.T) {
 		client := fake.NewSimpleClientset(pod)
 		informer := NewInformer(client, "node-a", time.Hour)
 		recorder, events := newTestObservers("node-a")
-		applier := apply.NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(informer.Lister(), applier, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(informer.Lister(), applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -271,7 +271,7 @@ func TestVC3ReconcileIsIdempotent(t *testing.T) {
 		applierFake := &fakeApplier{}
 		registry := prometheus.NewRegistry()
 		metrics := observe.NewMetrics(registry)
-		reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(lister, applierFake, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		var logBuf bytes.Buffer
 		reconciler.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -353,9 +353,9 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 		fakeRecorder := record.NewFakeRecorder(10)
 		recorder := observe.NewRecorder(prometheus.NewRegistry(), fakeRecorder, "node-a")
 		events := observe.NewEventRecorder(fakeRecorder)
-		applier := apply.NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(lister, applier, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		key, err := cache.MetaNamespaceKeyFunc(pod)
 		if err != nil {
@@ -397,9 +397,9 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 		fakeRecorder := record.NewFakeRecorder(10)
 		recorder := observe.NewRecorder(prometheus.NewRegistry(), fakeRecorder, "node-a")
 		events := observe.NewEventRecorder(fakeRecorder)
-		applier := apply.NewApplier(root, cgroup.DriverCgroupfs, recorder, events)
+		applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(lister, applier, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		key, err := cache.MetaNamespaceKeyFunc(pod)
 		if err != nil {
@@ -486,7 +486,7 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 	applierFake := &fakeApplier{}
 	registry := prometheus.NewRegistry()
 	metrics := observe.NewMetrics(registry)
-	reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+	reconciler := NewReconciler(lister, applierFake, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 	if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
@@ -553,7 +553,7 @@ func TestReconcileLogsQoSStatusMismatch(t *testing.T) {
 
 		applierFake := &fakeApplier{}
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(lister, applierFake, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		var logBuf bytes.Buffer
 		reconciler.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -596,7 +596,7 @@ func TestReconcileLogsQoSStatusMismatch(t *testing.T) {
 
 		applierFake := &fakeApplier{}
 		metrics := observe.NewMetrics(prometheus.NewRegistry())
-		reconciler := NewReconciler(lister, applierFake, root, cgroup.DriverCgroupfs, metrics, "node-a")
+		reconciler := NewReconciler(lister, applierFake, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 		var logBuf bytes.Buffer
 		reconciler.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -644,7 +644,7 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	metrics := observe.NewMetrics(registry)
-	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DriverCgroupfs, metrics, "node-a")
+	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 	if err := reconciler.refreshPodsInTier(); err != nil {
 		t.Fatalf("refreshPodsInTier() first pass error = %v", err)
@@ -712,7 +712,7 @@ func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	metrics := observe.NewMetrics(registry)
-	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DriverCgroupfs, metrics, "node-a")
+	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 	// Intent: establish the persistent series before the race starts, so
 	// the poll loop below only ever has to tell "still 1" apart from

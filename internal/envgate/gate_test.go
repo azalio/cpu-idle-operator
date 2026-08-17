@@ -39,19 +39,20 @@ func writeFile(t *testing.T, path, content string) {
 
 // buildV2Root creates a clean cgroup v2 fixture under t.TempDir(): a
 // cgroup.controllers file and, when driver is non-empty, the v2 kubepods
-// path matching driver. t.TempDir() is always a regular filesystem, so this
-// also swaps statfsType to report cgroup2fs for this specific root — a real
-// cgroup2 mount cannot be created inside a unit test.
-func buildV2Root(t *testing.T, driver cgroup.Driver) string {
+// path matching driver, named kubepodsName. t.TempDir() is always a regular
+// filesystem, so this also swaps statfsType to report cgroup2fs for this
+// specific root — a real cgroup2 mount cannot be created inside a unit
+// test.
+func buildV2Root(t *testing.T, driver cgroup.Driver, kubepodsName string) string {
 	t.Helper()
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "cgroup.controllers"), "cpu io memory pids\n")
 
 	switch driver {
 	case cgroup.DriverSystemd:
-		mkdir(t, filepath.Join(root, "kubepods.slice"))
+		mkdir(t, filepath.Join(root, kubepodsName+".slice"))
 	case cgroup.DriverCgroupfs:
-		mkdir(t, filepath.Join(root, "kubepods"))
+		mkdir(t, filepath.Join(root, kubepodsName))
 	}
 
 	original := statfsType
@@ -87,9 +88,27 @@ func failIfCalledUname(t *testing.T) UnameFunc {
 
 func TestVC1CgroupVersionGate(t *testing.T) {
 	t.Run("clean v2", func(t *testing.T) {
-		root := buildV2Root(t, cgroup.DriverSystemd)
+		root := buildV2Root(t, cgroup.DriverSystemd, cgroup.DefaultKubepodsName)
 
-		result, err := Check(root, fixedUname("6.17.0-061700-generic"))
+		result, err := Check(root, cgroup.DefaultKubepodsName, fixedUname("6.17.0-061700-generic"))
+		if err != nil {
+			t.Fatalf("Check returned error: %v", err)
+		}
+		if !result.Ready {
+			t.Errorf("Ready = false, want true; reason=%v", result.Reason)
+		}
+		if result.Reason != ReasonOK {
+			t.Errorf("Reason = %v, want %v", result.Reason, ReasonOK)
+		}
+		if result.Driver != cgroup.DriverSystemd {
+			t.Errorf("Driver = %v, want %v", result.Driver, cgroup.DriverSystemd)
+		}
+	})
+
+	t.Run("clean v2, non-default kubepods name (kind)", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, "kubelet-kubepods")
+
+		result, err := Check(root, "kubelet-kubepods", fixedUname("6.17.0-061700-generic"))
 		if err != nil {
 			t.Fatalf("Check returned error: %v", err)
 		}
@@ -108,7 +127,7 @@ func TestVC1CgroupVersionGate(t *testing.T) {
 		root := t.TempDir()
 		mkdir(t, filepath.Join(root, "cpu"))
 
-		result, err := Check(root, failIfCalledUname(t))
+		result, err := Check(root, cgroup.DefaultKubepodsName, failIfCalledUname(t))
 		if err != nil {
 			t.Fatalf("Check returned error: %v", err)
 		}
@@ -124,7 +143,7 @@ func TestVC1CgroupVersionGate(t *testing.T) {
 		root := t.TempDir()
 		mkdir(t, filepath.Join(root, "unified"))
 
-		result, err := Check(root, failIfCalledUname(t))
+		result, err := Check(root, cgroup.DefaultKubepodsName, failIfCalledUname(t))
 		if err != nil {
 			t.Fatalf("Check returned error: %v", err)
 		}
@@ -133,6 +152,81 @@ func TestVC1CgroupVersionGate(t *testing.T) {
 		}
 		if result.Reason != ReasonCgroupHybrid {
 			t.Errorf("Reason = %v, want %v", result.Reason, ReasonCgroupHybrid)
+		}
+	})
+}
+
+// TestDetectDriverHonorsConfiguredKubepodsName covers the fix this subtask
+// exists for: detectDriver (and, through it, Check) must key off the
+// caller-configured kubepods name, not a hardcoded "kubepods" literal —
+// otherwise a kind node (whose kubelet actually creates
+// "kubelet-kubepods.slice", never plain "kubepods.slice") would keep
+// reporting ReasonKubepodsMissing even once --kubepods-name is set
+// correctly.
+func TestDetectDriverHonorsConfiguredKubepodsName(t *testing.T) {
+	t.Run("non-default name present, configured correctly -> ready", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, "kubelet-kubepods")
+
+		result, err := Check(root, "kubelet-kubepods", fixedUname("6.17.0-061700-generic"))
+		if err != nil {
+			t.Fatalf("Check returned error: %v", err)
+		}
+		if !result.Ready {
+			t.Errorf("Ready = false, want true; reason=%v", result.Reason)
+		}
+		if result.Driver != cgroup.DriverSystemd {
+			t.Errorf("Driver = %v, want %v", result.Driver, cgroup.DriverSystemd)
+		}
+	})
+
+	t.Run("non-default name present, checked against the default name -> kubepods_missing", func(t *testing.T) {
+		// Reproduces the exact regression this fix closes: a kind-shaped
+		// fixture (only "kubelet-kubepods.slice" exists, never plain
+		// "kubepods.slice") must still report ReasonKubepodsMissing when
+		// asked about the default name -- proving detectDriver looks for
+		// the name it was actually given, not a hardcoded one.
+		root := buildV2Root(t, cgroup.DriverSystemd, "kubelet-kubepods")
+
+		result, err := Check(root, cgroup.DefaultKubepodsName, failIfCalledUname(t))
+		if err != nil {
+			t.Fatalf("Check returned error: %v", err)
+		}
+		if result.Ready {
+			t.Error("Ready = true, want false: the default kubepods name does not exist on this fixture")
+		}
+		if result.Reason != ReasonKubepodsMissing {
+			t.Errorf("Reason = %v, want %v", result.Reason, ReasonKubepodsMissing)
+		}
+	})
+
+	t.Run("default name present, configured name absent -> kubepods_missing", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, cgroup.DefaultKubepodsName)
+
+		result, err := Check(root, "kubelet-kubepods", failIfCalledUname(t))
+		if err != nil {
+			t.Fatalf("Check returned error: %v", err)
+		}
+		if result.Ready {
+			t.Error("Ready = true, want false: the configured kubepods name does not exist on this fixture")
+		}
+		if result.Reason != ReasonKubepodsMissing {
+			t.Errorf("Reason = %v, want %v", result.Reason, ReasonKubepodsMissing)
+		}
+	})
+
+	t.Run("both driver shapes present for the configured non-default name -> driver_unknown", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, "kubelet-kubepods")
+		mkdir(t, filepath.Join(root, "kubelet-kubepods"))
+
+		result, err := Check(root, "kubelet-kubepods", failIfCalledUname(t))
+		if err != nil {
+			t.Fatalf("Check returned error: %v", err)
+		}
+		if result.Ready {
+			t.Error("Ready = true, want false")
+		}
+		if result.Reason != ReasonDriverUnknown {
+			t.Errorf("Reason = %v, want %v", result.Reason, ReasonDriverUnknown)
 		}
 	})
 }
@@ -153,9 +247,9 @@ func TestVC2KernelFloor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := buildV2Root(t, cgroup.DriverSystemd)
+			root := buildV2Root(t, cgroup.DriverSystemd, cgroup.DefaultKubepodsName)
 
-			result, err := Check(root, fixedUname(tc.release))
+			result, err := Check(root, cgroup.DefaultKubepodsName, fixedUname(tc.release))
 			if err != nil {
 				t.Fatalf("Check returned error: %v", err)
 			}
@@ -217,7 +311,7 @@ func TestVC3NoWritesWhenGateFailed(t *testing.T) {
 
 	before := snapshotTree(t, root)
 
-	result, err := Check(root, failIfCalledUname(t))
+	result, err := Check(root, cgroup.DefaultKubepodsName, failIfCalledUname(t))
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -253,14 +347,14 @@ func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *recordingHandler) WithGroup(string) slog.Handler { return h }
 
 func TestVC4CgroupfsExperimentalWarning(t *testing.T) {
-	root := buildV2Root(t, cgroup.DriverCgroupfs)
+	root := buildV2Root(t, cgroup.DriverCgroupfs, cgroup.DefaultKubepodsName)
 
 	handler := &recordingHandler{}
 	original := warnLogger
 	warnLogger = slog.New(handler)
 	t.Cleanup(func() { warnLogger = original })
 
-	result, err := Check(root, fixedUname("6.17.0-061700-generic"))
+	result, err := Check(root, cgroup.DefaultKubepodsName, fixedUname("6.17.0-061700-generic"))
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}

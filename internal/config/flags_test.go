@@ -18,6 +18,9 @@ func TestVC3DefaultsAndOverrides(t *testing.T) {
 		if cfg.CgroupRoot != "/sys/fs/cgroup" {
 			t.Errorf("CgroupRoot = %q, want /sys/fs/cgroup", cfg.CgroupRoot)
 		}
+		if cfg.KubepodsName != "kubepods" {
+			t.Errorf("KubepodsName = %q, want kubepods", cfg.KubepodsName)
+		}
 		if cfg.NodeName != "node-a" {
 			t.Errorf("NodeName = %q, want node-a (from NODE_NAME env)", cfg.NodeName)
 		}
@@ -40,6 +43,7 @@ func TestVC3DefaultsAndOverrides(t *testing.T) {
 
 		cfg, err := ParseFlags([]string{
 			"--cgroup-root=/custom/cgroup",
+			"--kubepods-name=kubelet-kubepods",
 			"--node-name=node-from-flag",
 			"--resync-period=30s",
 			"--revert-all",
@@ -52,6 +56,9 @@ func TestVC3DefaultsAndOverrides(t *testing.T) {
 
 		if cfg.CgroupRoot != "/custom/cgroup" {
 			t.Errorf("CgroupRoot = %q, want /custom/cgroup", cfg.CgroupRoot)
+		}
+		if cfg.KubepodsName != "kubelet-kubepods" {
+			t.Errorf("KubepodsName = %q, want kubelet-kubepods", cfg.KubepodsName)
 		}
 		if cfg.NodeName != "node-from-flag" {
 			t.Errorf("NodeName = %q, want node-from-flag (flag beats env)", cfg.NodeName)

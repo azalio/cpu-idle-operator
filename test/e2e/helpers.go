@@ -56,16 +56,30 @@ const (
 
 	// prodCgroupRoot is exactly the --cgroup-root value
 	// config/base/daemonset.yaml ships (its default, see internal/config's
-	// defaultCgroupRoot). Every path this suite computes uses this root,
-	// never a kind-specific workaround: the whole point of this suite is
-	// proving whether production's own configuration works on kind, not
-	// whether some other root would.
+	// defaultCgroupRoot). It is still the right mount point to run `find`
+	// diagnostics against (findNodePath) regardless of kubepods name or
+	// driver, since it is the real cgroup v2 mount itself, not a
+	// kubepods-specific path.
 	prodCgroupRoot = "/sys/fs/cgroup"
+
+	// kindCgroupRoot and kindKubepodsName are the --cgroup-root and
+	// --kubepods-name values this suite configures the DaemonSet with on
+	// kind (patchKindCgroupFlags), instead of config/base's own
+	// production-correct defaults. Measured directly on the kind node
+	// (preflight_test.go's doc comment): kind's kubeadm config sets
+	// kubelet's own cgroupRoot to "/kubelet", which systemd turns into a
+	// "kubelet.slice" top-level slice and prefixes every kubepods
+	// slice/directory name under it with "kubelet-". config/base itself
+	// must keep shipping the plain defaults (correct for a real production
+	// kubelet, see README's Supported Environments section) — these
+	// constants exist only so this suite can exercise the positive AC-10
+	// scenario for real on a kind node.
+	kindCgroupRoot   = prodCgroupRoot + "/kubelet.slice"
+	kindKubepodsName = "kubelet-kubepods"
 
 	agentNamespace     = "cpi-idle-system"
 	agentDaemonSet     = "cpi-idle-agent"
 	agentLabelSelector = "app.kubernetes.io/component=agent"
-	agentHealthPort    = 8081
 
 	// podReadyTimeout matches hack/stand-probe.sh's own pod-wait timeout
 	// (120s) for the same reason: a busybox image pull in CI can be slower
@@ -192,16 +206,18 @@ func escapeUID(uid string) string {
 }
 
 // computeAgentPath returns the pod-cgroup path the agent's own
-// cgroup.PodCgroupPath computes for uid under prodCgroupRoot with the
+// cgroup.PodCgroupPath computes for uid under root/kubepodsName with the
 // systemd driver. kind's node image always configures kubelet with the
 // systemd driver (confirmed by reading /var/lib/kubelet/config.yaml on the
 // node while writing this suite), so DriverSystemd is the only branch this
-// suite ever needs.
-func computeAgentPath(t *testing.T, qosClass cgroup.QoSClass, uid string) string {
+// suite ever needs. Callers pass kindCgroupRoot/kindKubepodsName to match
+// what this suite actually deploys the DaemonSet with on kind
+// (patchKindCgroupFlags).
+func computeAgentPath(t *testing.T, root, kubepodsName string, qosClass cgroup.QoSClass, uid string) string {
 	t.Helper()
-	path, err := cgroup.PodCgroupPath(prodCgroupRoot, cgroup.DriverSystemd, qosClass, uid)
+	path, err := cgroup.PodCgroupPath(root, kubepodsName, cgroup.DriverSystemd, qosClass, uid)
 	if err != nil {
-		t.Fatalf("PodCgroupPath(%q, systemd, %q, %q): %v", prodCgroupRoot, qosClass, uid, err)
+		t.Fatalf("PodCgroupPath(%q, %q, systemd, %q, %q): %v", root, kubepodsName, qosClass, uid, err)
 	}
 	return path
 }
@@ -375,22 +391,27 @@ func forcePullPolicyNever(t *testing.T) {
 	)...)
 }
 
-// proxyGet fetches path from podName's port through the API server's pod
-// proxy subresource, returning combined output and kubectl's error.
+// patchKindCgroupFlags patches the deployed DaemonSet's --cgroup-root
+// argument to kindCgroupRoot and adds --kubepods-name=kindKubepodsName, so
+// the agent's own pod-cgroup path computation matches what kind's kubelet
+// actually creates (measured; see preflight_test.go's doc comment) instead
+// of config/base's own production-correct defaults, which never converge
+// on a kind node. config/base/daemonset.yaml itself is never changed for
+// this — production clusters must keep the plain defaults (README's
+// Supported Environments section); this patch exists purely so this suite
+// can exercise the positive AC-10 scenario for real on kind.
 //
-// This goes through `kubectl get --raw .../proxy/...` rather than execing
-// curl/wget inside the pod: the runtime image has no shell (see Dockerfile),
-// so an in-pod exec is not available here at all, and the API server proxy
-// reaches the same port a real client without a Service would.
-func proxyGet(podName string, port int, path string) (string, error) {
-	target := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:%d/proxy/%s", agentNamespace, podName, port, path)
-	cmd := exec.Command("kubectl", kubectlArgs("get", "--raw", target)...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-// agentLogs returns the current agent pod's logs.
-func agentLogs(t *testing.T) string {
+// args[0] is always "--cgroup-root=..." (config/base/daemonset.yaml's own
+// fixed argument order), so replacing index 0 is safe without first reading
+// the DaemonSet back to search for it.
+func patchKindCgroupFlags(t *testing.T) {
 	t.Helper()
-	return runCmd(t, "kubectl", kubectlArgs("-n", agentNamespace, "logs", "-l", agentLabelSelector, "--tail=100")...)
+	runCmd(t, "kubectl", kubectlArgs(
+		"-n", agentNamespace, "patch", "daemonset", agentDaemonSet,
+		"--type=json",
+		"-p", fmt.Sprintf(
+			`[{"op":"replace","path":"/spec/template/spec/containers/0/args/0","value":"--cgroup-root=%s"},`+
+				`{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubepods-name=%s"}]`,
+			kindCgroupRoot, kindKubepodsName),
+	)...)
 }
