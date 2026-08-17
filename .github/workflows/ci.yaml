@@ -1,0 +1,186 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# internal/cgroup (and everything that imports it, which is most of this
+# module — see internal/cgroup's own README note repeated in the Makefile)
+# only compiles under GOOS=linux: it depends on Linux-only cgroup v2
+# syscalls. Every job below therefore runs on ubuntu-latest, never on a
+# matrix that includes macOS or Windows — this is not a portability gap to
+# fix, it is this agent's actual deployment target (a Linux DaemonSet).
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  vet:
+    name: go vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          # "latest" rather than a pin: golangci-lint's own Go-version
+          # floor moves forward with every release, and this module's
+          # go.mod (see go.mod's `go` directive) needs a build of
+          # golangci-lint no older than that -- pinning an old version here
+          # would fail this job for a reason that has nothing to do with
+          # this repository's code.
+          version: latest
+          args: --build-tags=e2e
+
+  unit:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./... -v -count=1
+
+  check-manifests:
+    name: check-manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install kustomize and yq
+        run: |
+          go install sigs.k8s.io/kustomize/kustomize/v5@v5.4.3
+          go install github.com/mikefarah/yq/v4@v4.44.3
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: hack/check-manifests.sh
+
+  check-readme-keys:
+    name: check-readme-keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: hack/check-readme-keys.sh
+
+  e2e:
+    name: e2e (kind)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # T-012.md: "Раннер CI должен быть на cgroup v2 — актуальные
+      # ubuntu-образы это дают, но проверить явно, а не предположить."
+      # This mirrors hack/stand-probe.sh's own preflight() check on a real
+      # node, applied here to the CI runner itself: an e2e failure caused by
+      # the runner silently being on cgroup v1 must never look like an
+      # agent regression.
+      - name: Verify runner is on cgroup v2
+        run: |
+          fstype="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
+          if [ "${fstype}" != "cgroup2fs" ]; then
+            echo "::error::This runner's /sys/fs/cgroup is not cgroup v2 (detected type: '${fstype:-unknown}'). cpi-idle-operator requires cgroup v2 unified (HC-1): cpu.idle does not exist for cgroup v1. This is a runner/environment problem, not a code regression."
+            exit 1
+          fi
+          echo "runner confirmed on cgroup v2 (${fstype})"
+
+      - name: Build agent image
+        run: docker build -t ghcr.io/azalio/cpi-idle-operator:latest .
+
+      # Installed directly from kind's own release binary (not a
+      # third-party marketplace action) so this step's exact behavior is
+      # verifiable by reading kind's own release page rather than trusting
+      # an action's undocumented-here input schema. Pinned to v0.29.0 to
+      # match the version this suite was developed and measured against
+      # (see preflight_test.go's doc comment).
+      - name: Install kind
+        run: |
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64"
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Create kind cluster
+        run: kind create cluster --name cpi-idle-e2e --config test/e2e/kind-config.yaml --wait 120s
+
+      - name: Load agent image into kind
+        run: kind load docker-image ghcr.io/azalio/cpi-idle-operator:latest --name cpi-idle-e2e
+
+      # Open Question 1 (.map/default/spec_default.md,
+      # .map/wayfind/cpu-idle-operator/resolutions/T-012.md,
+      # test/e2e/preflight_test.go): measured on kind v0.29.0 /
+      # kindest/node:v1.33.1, the agent's computed pod-cgroup path and the
+      # one kind's kubelet actually creates do NOT converge, because kind's
+      # own kubeadm config sets kubelet's cgroupRoot to "/kubelet". That is
+      # a documented, structural property of kind itself, not a flaky
+      # result -- so this specific, named failure does not block merge
+      # (blocking on it would mean no PR could ever merge again). Any OTHER
+      # preflight outcome does block: an unexpected pass means Open
+      # Question 1 has a new answer and this job's logic needs updating
+      # right along with README/spec; an unexpected failure reason means
+      # something is actually broken.
+      - name: Run cgroup-view pre-flight (documents Open Question 1)
+        run: |
+          set +o errexit
+          go test -tags e2e -v -run '^TestPreflightKindCgroupViewConsistency$' ./test/e2e/... 2>&1 | tee preflight.log
+          status="${PIPESTATUS[0]}"
+          set -o errexit
+
+          if [ "${status}" -eq 0 ]; then
+            echo "::notice::Pre-flight PASSED: Open Question 1 has converged on this kind image. Update README/spec/T-012.md -- the positive AC-10 scenario in test/e2e/e2e_test.go should now be treated as a required blocking check instead of the fail-safe fallback."
+            exit 0
+          fi
+          if grep -q 'OPEN QUESTION 1' preflight.log; then
+            echo "::warning::Pre-flight failed for the documented Open Question 1 reason (kind's kubeadm cgroupRoot nesting, see test/e2e/preflight_test.go) -- not treated as a merge blocker."
+            exit 0
+          fi
+          echo "::error::Pre-flight failed for an UNDOCUMENTED reason. Failing the build -- see preflight.log above."
+          exit 1
+        shell: bash
+
+      # This DOES block merge: whether or not Open Question 1's answer has
+      # changed, the DaemonSet built from config/base must always come up
+      # and behave safely on a real cluster (AC-6, INV-5) -- or, once
+      # convergence happens, apply and revert the idle tier for real
+      # (AC-10). See e2e_test.go's own doc comment for which branch runs.
+      - name: Run kind e2e scenario
+        run: go test -tags e2e -v -run '^TestKindApplyAndRevert$' ./test/e2e/...
+
+      - name: Delete kind cluster
+        if: always()
+        run: kind delete cluster --name cpi-idle-e2e
+
+  ci:
+    name: ci
+    if: always()
+    needs: [vet, lint, unit, check-manifests, check-readme-keys, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all jobs to have succeeded
+        env:
+          NEEDS_RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in ${NEEDS_RESULTS}; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::At least one required job did not succeed: ${NEEDS_RESULTS}"
+              exit 1
+            fi
+          done
