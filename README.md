@@ -75,6 +75,25 @@ make deploy           # kustomize build config/base | kubectl apply -f -
 itself. Apply one of the samples under `config/samples/` to see the agent
 react to an annotation.
 
+`config/base/daemonset.yaml` references `ghcr.io/azalio/cpi-idle-operator`.
+[`.github/workflows/publish.yaml`](.github/workflows/publish.yaml) publishes
+that image to GHCR on every merge to `main` (tags: `latest` and the commit
+sha) and on every `v*` tag (the matching semver tag) -- **but not before
+then**. Until this branch's first merge to `main`, `ghcr.io/azalio/cpi-idle-operator:latest`
+does not exist yet, and `make deploy` against a real cluster will pull it
+straight into `ImagePullBackOff`. To try the agent before that first
+publish, build and load the image into your own cluster instead of relying
+on the registry -- e.g. for `kind`: `make docker-build && kind load
+docker-image ghcr.io/azalio/cpi-idle-operator:latest --name <your-cluster>`,
+the same thing CI's own e2e job does (see
+[`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)).
+
+`config/base` itself is generated from the Helm chart under
+[`deploy/helm/cpi-idle-operator`](deploy/helm/cpi-idle-operator), which is
+the source of truth for the manifests. Run `make manifests` after changing
+the chart and commit the regenerated `config/base` -- CI's
+`check-manifests-drift` job fails the build if the two are out of sync.
+
 ## Supported environments
 
 | Environment | Status |

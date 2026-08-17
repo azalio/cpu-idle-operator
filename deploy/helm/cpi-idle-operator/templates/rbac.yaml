@@ -1,0 +1,39 @@
+# RBAC is intentionally the smallest surface this agent needs (resolution
+# T-008): no leases, because leader election does not exist here — a
+# DaemonSet is one pod per node and nodes never share a cgroup tree, so
+# there is no election to run.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cpi-idle-agent
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cpi-idle-agent
+rules:
+  # The agent's informer watches every pod cluster-wide and filters to its
+  # own node via fieldSelector — the watch itself is still a cluster-scoped
+  # verb, so this stays a ClusterRole rather than a per-namespace Role.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # create/patch on events is how the agent reports tier changes and
+  # rejected writes back onto the pod it acted on (CCR-1).
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cpi-idle-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cpi-idle-agent
+subjects:
+  - kind: ServiceAccount
+    name: cpi-idle-agent
+    namespace: {{ .Values.namespace }}

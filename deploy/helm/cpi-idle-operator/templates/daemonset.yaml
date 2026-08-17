@@ -14,7 +14,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: cpi-idle-agent
-  namespace: cpi-idle-system
+  namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: cpi-idle-operator
     app.kubernetes.io/component: agent
@@ -38,9 +38,9 @@ spec:
       hostIPC: false
       containers:
         - name: agent
-          image: ghcr.io/azalio/cpi-idle-operator:latest
+          image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           args:
-            - --cgroup-root=/sys/fs/cgroup
+            - --cgroup-root={{ .Values.cgroupRoot }}
             # --kubepods-name is only rendered when it deviates from the
             # agent's own built-in default ("kubepods", correct for a stock
             # kubelet): test/e2e/helpers.go's patchKindCgroupFlags adds this
@@ -48,10 +48,13 @@ spec:
             # end of args, and assumes it isn't already present -- see that
             # function's doc comment. Rendering it here unconditionally
             # would silently produce two --kubepods-name flags on kind.
+            {{- if ne .Values.kubepodsName "kubepods" }}
+            - --kubepods-name={{ .Values.kubepodsName }}
+            {{- end }}
             - --node-name=$(NODE_NAME)
-            - --resync-period=60s
-            - --metrics-addr=:8080
-            - --health-addr=:8081
+            - --resync-period={{ .Values.resyncPeriod }}
+            - --metrics-addr={{ .Values.metricsAddr }}
+            - --health-addr={{ .Values.healthAddr }}
           env:
             # NODE_NAME is mandatory: internal/config.ParseFlags treats an
             # empty node name as a fatal startup error rather than falling
@@ -62,10 +65,10 @@ spec:
                   fieldPath: spec.nodeName
           ports:
             - name: metrics
-              containerPort: 8080
+              containerPort: {{ include "cpi-idle-operator.port" .Values.metricsAddr }}
               protocol: TCP
             - name: health
-              containerPort: 8081
+              containerPort: {{ include "cpi-idle-operator.port" .Values.healthAddr }}
               protocol: TCP
           readinessProbe:
             httpGet:
@@ -85,6 +88,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          {{- if .Values.resources }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
           volumeMounts:
             # rw on purpose: the agent writes cpu.idle on pod cgroups under
             # this path. See the SECURITY NOTE above the DaemonSet metadata
@@ -92,6 +99,18 @@ spec:
             - name: cgroup
               mountPath: /sys/fs/cgroup
               readOnly: false
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- end }}
       volumes:
         - name: cgroup
           hostPath:

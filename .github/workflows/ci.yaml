@@ -72,6 +72,22 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: hack/check-manifests.sh
 
+  check-manifests-drift:
+    name: check-manifests-drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+      # config/base is generated from deploy/helm/cpi-idle-operator, not
+      # hand-maintained in parallel (see the "manifests" Makefile target).
+      # This re-renders it and fails if the committed config/base doesn't
+      # match: the two places would otherwise be free to drift apart
+      # silently, with nothing catching it until someone notices the
+      # deployed manifest doesn't match the chart.
+      - run: make check-manifests-drift
+
   check-readme-keys:
     name: check-readme-keys
     runs-on: ubuntu-latest
@@ -154,7 +170,16 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [vet, lint, unit, check-manifests, check-readme-keys, e2e]
+    needs:
+      [
+        vet,
+        lint,
+        unit,
+        check-manifests,
+        check-manifests-drift,
+        check-readme-keys,
+        e2e,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Require all jobs to have succeeded

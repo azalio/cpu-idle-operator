@@ -1,0 +1,61 @@
+name: publish
+
+# Deliberately push-only: this workflow must never run on pull_request. A
+# fork-originated PR run would need packages: write against GHCR with no
+# way to safely scope GITHUB_TOKEN down for untrusted code, so publishing
+# only happens after code has actually merged (push to main) or been
+# tagged (push of a v* tag) -- never on the PR that proposes it.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: publish image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # On a push to main: "latest" plus a tag pinned to the commit sha.
+      # On a v* tag push: the matching semver tag(s), and only those --
+      # metadata-action's semver type is a no-op on a branch push, so main
+      # never picks up a stray semver tag and a version tag never picks up
+      # "latest".
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
