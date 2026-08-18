@@ -1,0 +1,21 @@
+{
+  "branch": "default",
+  "holds": {
+    "hold-001": {
+      "id": "hold-001",
+      "kind": "plan_approval",
+      "reason": "The generated plan requires explicit approval before execution.",
+      "request_summary": "Approve the generated plan for default",
+      "source": "map-plan",
+      "branch": "default",
+      "state": "approved",
+      "created_at": "2026-08-16T19:15:54.181420Z",
+      "decision": "approved",
+      "decision_note": "\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440 \u0443\u0442\u0432\u0435\u0440\u0434\u0438\u043b \u043f\u043b\u0430\u043d \u0432 \u0434\u0438\u0430\u043b\u043e\u0433\u0435 \u043f\u0435\u0440\u0435\u0434 \u0437\u0430\u043f\u0443\u0441\u043a\u043e\u043c ST-014",
+      "decided_at": "2026-08-16T19:18:49.126953Z",
+      "safe_continuation": "Review the plan and decide the hold via decide_approval_hold (approved/denied) before starting /map-efficient or /map-task."
+    }
+  },
+  "next_id": 2,
+  "updated_at": "2026-08-16T19:18:49.126953Z"
+}

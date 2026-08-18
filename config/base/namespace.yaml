@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cpi-idle-system
+  labels:
+    app.kubernetes.io/name: cpi-idle-operator

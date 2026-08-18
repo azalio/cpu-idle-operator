@@ -1,0 +1,26 @@
+# Single-node kind cluster for cpi-idle-operator's e2e suite (test/e2e).
+#
+# One node only: a second (worker) node would not help here and would only
+# slow the cluster down. The property under test is whether *any* kind node
+# exposes the same cgroup view the agent computes -- that is decided by
+# kind's own kubeadm defaults, not by node count.
+#
+# No extraMounts for /sys/fs/cgroup. That recommendation came from earlier,
+# unverified research (see
+# .map/wayfind/cpu-idle-operator/resolutions/T-012.md) and was checked
+# against the real failure mode before deciding whether to add it here:
+# preflight_test.go measured that the agent's computed pod-cgroup path and
+# kubelet's real one diverge because kind's own kubeadm config sets the
+# node's kubelet cgroupRoot to "/kubelet", nesting the whole kubepods
+# hierarchy one level deeper under a "kubelet-" prefix. That divergence is
+# visible directly inside the node container itself, with no pod or
+# hostPath mount involved at all -- an extraMounts bind of /sys/fs/cgroup
+# changes what is visible *through a mount*, not what kubelet names its own
+# slices, so it would not have changed this outcome. Applying it anyway
+# would have hidden the real cause behind an irrelevant "fix" that happened
+# to look plausible. See preflight_test.go's doc comment for the measured
+# paths and .github/workflows/ci.yaml for what CI does with this result.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane

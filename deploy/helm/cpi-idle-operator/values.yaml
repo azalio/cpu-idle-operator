@@ -1,0 +1,43 @@
+# Default values for cpi-idle-operator.
+#
+# These defaults reproduce config/base exactly (see the "manifests" Makefile
+# target, which renders config/base from this chart). Changing a default
+# here changes what `make manifests` regenerates into config/base -- run it
+# and commit the result, don't hand-edit config/base separately.
+
+# namespace is used both for the Namespace object this chart creates and as
+# the namespace of every namespaced resource (ServiceAccount, DaemonSet) and
+# the ClusterRoleBinding subject.
+namespace: cpi-idle-system
+
+image:
+  repository: ghcr.io/azalio/cpi-idle-operator
+  tag: latest
+
+# Container resource requests/limits. Left empty by default, matching
+# config/base's DaemonSet, which sets no resources block at all.
+resources: {}
+
+# --resync-period: the informer's full resync interval.
+resyncPeriod: 60s
+
+# --cgroup-root: filesystem root under which pod cgroups are located.
+cgroupRoot: /sys/fs/cgroup
+
+# --kubepods-name: top-level kubepods cgroup slice/directory name kubelet
+# actually uses under cgroupRoot. "kubepods" is correct for a stock
+# kubelet; some clusters (e.g. kind) need a different value -- see
+# README.md's "Non-default kubelet --cgroup-root" section. Do not change
+# this default for config/base's own sake: it must stay correct for a real
+# production kubelet.
+kubepodsName: kubepods
+
+# --metrics-addr / --health-addr: listen addresses for the Prometheus
+# metrics endpoint and the health/readiness endpoint. The port segment of
+# each value is also used as the matching container port.
+metricsAddr: ":8080"
+healthAddr: ":8081"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

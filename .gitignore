@@ -12,3 +12,12 @@ bin/
 *.test
 *.out
 coverage.txt
+
+# map:session-telemetry — состояние текущей сессии MAP, меняется на каждом ходу.
+# Артефакты планирования (спека, блюпринт, ревью, wayfind-карты) остаются в git.
+.map/*/token_accounting.json
+.map/*/token_log.jsonl
+.map/*/iteration_log.jsonl
+.map/*/iteration_summary.json
+.map/*/.token-meter-cache.json
+.map/*/sessions/scratch/

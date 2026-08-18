@@ -1,0 +1,427 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-17T03:37:48.507808Z",
+  "workflow": "map-efficient",
+  "branch": "default",
+  "minimality": "lite",
+  "terminal_status": "pending",
+  "current_step_id": "2.3",
+  "current_step_phase": "ACTOR",
+  "current_subtask_id": "ST-015",
+  "completed_step_count": 3,
+  "pending_step_count": 2,
+  "artifacts": {
+    "step_state": {
+      "kind": "state",
+      "path": ".map/default/step_state.json",
+      "present": true,
+      "size_bytes": 17172
+    },
+    "artifact_manifest": {
+      "kind": "manifest",
+      "path": ".map/default/artifact_manifest.json",
+      "present": true,
+      "size_bytes": 5611
+    },
+    "verification_summary": {
+      "kind": "verification",
+      "path": ".map/default/verification-summary.md",
+      "present": true,
+      "size_bytes": 9091
+    },
+    "qa": {
+      "kind": "qa",
+      "path": ".map/default/qa-001.md",
+      "present": false,
+      "size_bytes": 0
+    },
+    "pr_draft": {
+      "kind": "pr-draft",
+      "path": ".map/default/pr-draft.md",
+      "present": false,
+      "size_bytes": 0
+    },
+    "review_bundle": {
+      "kind": "review-bundle",
+      "path": ".map/default/review-bundle.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "learning_handoff": {
+      "kind": "learning-handoff",
+      "path": ".map/default/learning-handoff.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "task_plan": {
+      "kind": "task-plan",
+      "path": ".map/default/task_plan_default.md",
+      "present": true,
+      "size_bytes": 48112
+    },
+    "blueprint": {
+      "kind": "blueprint",
+      "path": ".map/default/blueprint.json",
+      "present": true,
+      "size_bytes": 116507
+    },
+    "active_issues": {
+      "kind": "active-issues",
+      "path": ".map/default/active-issues.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "known_issues": {
+      "kind": "known-issues",
+      "path": ".map/default/known-issues.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "retry_quarantine": {
+      "kind": "retry-quarantine",
+      "path": ".map/default/retry_quarantine.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "flaky_test_triage": {
+      "kind": "flaky-test-triage",
+      "path": ".map/default/flaky_test_triage.json",
+      "present": false,
+      "size_bytes": 0
+    },
+    "qualitative_convergence": {
+      "kind": "qualitative-convergence",
+      "path": ".map/default/qualitative_convergence.json",
+      "present": false,
+      "size_bytes": 0
+    }
+  },
+  "research": {
+    "schema_version": "1.0",
+    "artifact_count": 14,
+    "valid_artifact_count": 13,
+    "invalid_artifact_count": 1,
+    "low_confidence_artifact_count": 0,
+    "location_count": 56,
+    "research_tokens": 2596671,
+    "research_est_cost_usd": 0.595539,
+    "actor_monitor_tokens": 180382829,
+    "actor_monitor_est_cost_usd": 502.423539,
+    "research_token_share": 0.012,
+    "by_subtask": {
+      "ST-001": {
+        "artifact_count": 0,
+        "valid_artifact_count": 0,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 0,
+        "statuses": [],
+        "kinds": [],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 5178349,
+        "actor_monitor_est_cost_usd": 15.133743,
+        "research_token_share": 0.0
+      },
+      "ST-002": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 15995617,
+        "actor_monitor_est_cost_usd": 43.784458,
+        "research_token_share": 0.0
+      },
+      "ST-003": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 4399362,
+        "actor_monitor_est_cost_usd": 15.642772,
+        "research_token_share": 0.0
+      },
+      "ST-004": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 9379420,
+        "actor_monitor_est_cost_usd": 28.323558,
+        "research_token_share": 0.0
+      },
+      "ST-005": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 10758600,
+        "actor_monitor_est_cost_usd": 37.675166,
+        "research_token_share": 0.0
+      },
+      "ST-006": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 42155168,
+        "actor_monitor_est_cost_usd": 97.883916,
+        "research_token_share": 0.0
+      },
+      "ST-007": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 12810421,
+        "actor_monitor_est_cost_usd": 41.972978,
+        "research_token_share": 0.0
+      },
+      "ST-008": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 6448448,
+        "actor_monitor_est_cost_usd": 21.566117,
+        "research_token_share": 0.0
+      },
+      "ST-009": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 13513691,
+        "actor_monitor_est_cost_usd": 38.938066,
+        "research_token_share": 0.0
+      },
+      "ST-010": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 10417123,
+        "actor_monitor_est_cost_usd": 31.282632,
+        "research_token_share": 0.0
+      },
+      "ST-011": {
+        "artifact_count": 1,
+        "valid_artifact_count": 0,
+        "invalid_artifact_count": 1,
+        "low_confidence_artifact_count": 0,
+        "location_count": 3,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 6332316,
+        "actor_monitor_est_cost_usd": 19.328869,
+        "research_token_share": 0.0
+      },
+      "ST-012": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 6319989,
+        "actor_monitor_est_cost_usd": 17.477191,
+        "research_token_share": 0.0
+      },
+      "ST-013": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 16015677,
+        "actor_monitor_est_cost_usd": 37.299352,
+        "research_token_share": 0.0
+      },
+      "ST-014": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 5,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 2696579,
+        "actor_monitor_est_cost_usd": 11.891082,
+        "research_token_share": 0.0
+      },
+      "ST-015": {
+        "artifact_count": 1,
+        "valid_artifact_count": 1,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 4,
+        "statuses": [
+          "OK"
+        ],
+        "kinds": [
+          "actor"
+        ],
+        "research_tokens": 0,
+        "research_est_cost_usd": 0.0,
+        "actor_monitor_tokens": 17482782,
+        "actor_monitor_est_cost_usd": 40.251714,
+        "research_token_share": 0.0
+      },
+      "unattributed": {
+        "artifact_count": 0,
+        "valid_artifact_count": 0,
+        "invalid_artifact_count": 0,
+        "low_confidence_artifact_count": 0,
+        "location_count": 0,
+        "statuses": [],
+        "kinds": [],
+        "research_tokens": 2596671,
+        "research_est_cost_usd": 0.595539,
+        "actor_monitor_tokens": 479287,
+        "actor_monitor_est_cost_usd": 3.971925,
+        "research_token_share": 0.8442
+      }
+    },
+    "warnings": [
+      "ST-011__actor.md: relevant_locations[1].lines end exceeds file length (96)"
+    ]
+  },
+  "resiliency_signals": {
+    "hook_injection": {
+      "status": "skipped",
+      "reason": "bash command not significant",
+      "tool_name": "Bash",
+      "additional_context_chars": 0,
+      "updated_at": "2026-08-17T03:37:45.050900Z"
+    },
+    "hook_injection_counts": {
+      "skipped": 30,
+      "injected": 25,
+      "deduped": 5
+    },
+    "retry_count": 0,
+    "max_retries": 5,
+    "subtask_retry_counts": {},
+    "max_subtask_retry_count": 0,
+    "clean_retry_count": 0,
+    "contaminated_retry_count": 4,
+    "retry_isolation_status": {
+      "ST-002": "normal_retry",
+      "ST-004": "normal_retry",
+      "ST-006": "normal_retry",
+      "ST-012": "normal_retry"
+    },
+    "guard_rework_counts": {},
+    "predictor_called": false,
+    "predictor_skipped": false,
+    "final_verifier_executed": true
+  }
+}

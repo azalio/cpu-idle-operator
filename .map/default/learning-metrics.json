@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "branch": "default",
+  "updated_at": "2026-08-17T03:37:48.654726Z",
+  "counters": {
+    "handoff_generated_count": 1,
+    "handoff_consumed_count": 0,
+    "immediate_learn_count": 0,
+    "deferred_learn_count": 0,
+    "never_used_handoff_count": 0,
+    "manual_summary_count": 0,
+    "pending_handoff_count": 1,
+    "repeated_violation_scan_count": 1,
+    "repeated_violation_match_count": 0
+  },
+  "current_handoff": {
+    "workflow": "map-efficient",
+    "generated_at": "2026-08-17T03:37:48.618399Z",
+    "consumed_at": "",
+    "consumption_mode": "",
+    "consumption_source": "",
+    "handoff_markdown_path": ".map/default/learning-handoff.md",
+    "handoff_json_path": ".map/default/learning-handoff.json"
+  },
+  "events": [
+    {
+      "event": "learning_handoff_generated",
+      "timestamp": "2026-08-17T03:37:48.618399Z",
+      "branch": "default",
+      "workflow": "map-efficient",
+      "handoff_markdown_path": ".map/default/learning-handoff.md",
+      "handoff_json_path": ".map/default/learning-handoff.json"
+    }
+  ],
+  "repeated_violation_summary": {
+    "checked_at": "2026-08-17T03:37:48.654721Z",
+    "finding_count": 0,
+    "learned_rule_count": 0,
+    "matched_count": 0,
+    "matches": []
+  }
+}

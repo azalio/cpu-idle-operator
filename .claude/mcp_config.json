@@ -1,0 +1,39 @@
+{
+  "mcp_servers": {
+    "sequential-thinking": {
+      "enabled": true,
+      "description": "Chain-of-thought reasoning",
+      "config": {
+        "max_thoughts": 10,
+        "branch_exploration": true,
+        "hypothesis_verification": true
+      }
+    }
+  },
+  "agent_mcp_mappings": {
+    "task-decomposer": [
+      "sequential-thinking"
+    ],
+    "actor": [],
+    "monitor": [
+      "sequential-thinking"
+    ],
+    "predictor": [],
+    "evaluator": [
+      "sequential-thinking"
+    ],
+    "reflector": [
+      "sequential-thinking"
+    ],
+    "documentation-reviewer": [],
+    "research-agent": [],
+    "final-verifier": []
+  },
+  "workflow_settings": {
+    "always_retrieve_knowledge": true,
+    "store_successful_patterns": true,
+    "use_professional_review": true,
+    "enable_sequential_thinking": true,
+    "knowledge_cache_ttl": 3600
+  }
+}
