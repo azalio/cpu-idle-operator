@@ -75,16 +75,16 @@ make deploy           # kustomize build config/base | kubectl apply -f -
 itself. Apply one of the samples under `config/samples/` to see the agent
 react to an annotation.
 
-`config/base/daemonset.yaml` references `ghcr.io/azalio/cpi-idle-operator`.
+`config/base/daemonset.yaml` references `ghcr.io/azalio/cpu-idle-operator`.
 [`.github/workflows/publish.yaml`](.github/workflows/publish.yaml) publishes
 that image to GHCR on every merge to `main` (tags: `latest` and the commit
 sha) and on every `v*` tag (the matching semver tag) -- **but not before
-then**. Until this branch's first merge to `main`, `ghcr.io/azalio/cpi-idle-operator:latest`
+then**. Until this branch's first merge to `main`, `ghcr.io/azalio/cpu-idle-operator:latest`
 does not exist yet, and `make deploy` against a real cluster will pull it
 straight into `ImagePullBackOff`. To try the agent before that first
 publish, build and load the image into your own cluster instead of relying
 on the registry -- e.g. for `kind`: `make docker-build && kind load
-docker-image ghcr.io/azalio/cpi-idle-operator:latest --name <your-cluster>`,
+docker-image ghcr.io/azalio/cpu-idle-operator:latest --name <your-cluster>`,
 the same thing CI's own e2e job does (see
 [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)).
 

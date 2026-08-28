@@ -38,7 +38,7 @@ spec:
       hostIPC: false
       containers:
         - name: agent
-          image: ghcr.io/azalio/cpi-idle-operator:latest
+          image: ghcr.io/azalio/cpu-idle-operator:latest
           args:
             - --cgroup-root=/sys/fs/cgroup
             # --kubepods-name is only rendered when it deviates from the

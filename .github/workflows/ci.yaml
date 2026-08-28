@@ -126,7 +126,7 @@ jobs:
           echo "runner confirmed on cgroup v2 (${fstype})"
 
       - name: Build agent image
-        run: docker build -t ghcr.io/azalio/cpi-idle-operator:latest .
+        run: docker build -t ghcr.io/azalio/cpu-idle-operator:latest .
 
       # Installed directly from kind's own release binary (not a
       # third-party marketplace action) so this step's exact behavior is
@@ -145,7 +145,7 @@ jobs:
         run: kind create cluster --name cpi-idle-e2e --config test/e2e/kind-config.yaml --wait 120s
 
       - name: Load agent image into kind
-        run: kind load docker-image ghcr.io/azalio/cpi-idle-operator:latest --name cpi-idle-e2e
+        run: kind load docker-image ghcr.io/azalio/cpu-idle-operator:latest --name cpi-idle-e2e
 
       # Formerly Open Question 1 (.map/default/spec_default.md,
       # .map/wayfind/cpu-idle-operator/resolutions/T-012.md,

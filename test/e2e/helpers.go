@@ -15,8 +15,8 @@
 //
 //	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster \
 //	    --name cpi-idle-e2e --config test/e2e/kind-config.yaml
-//	podman build -t ghcr.io/azalio/cpi-idle-operator:latest .
-//	podman save ghcr.io/azalio/cpi-idle-operator:latest -o /tmp/cpi-idle.tar
+//	podman build -t ghcr.io/azalio/cpu-idle-operator:latest .
+//	podman save ghcr.io/azalio/cpu-idle-operator:latest -o /tmp/cpi-idle.tar
 //	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive \
 //	    /tmp/cpi-idle.tar --name cpi-idle-e2e
 //	go test -tags e2e -v ./test/e2e/...

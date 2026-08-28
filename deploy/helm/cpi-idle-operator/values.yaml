@@ -11,7 +11,7 @@
 namespace: cpi-idle-system
 
 image:
-  repository: ghcr.io/azalio/cpi-idle-operator
+  repository: ghcr.io/azalio/cpu-idle-operator
   tag: latest
 
 # Container resource requests/limits. Left empty by default, matching

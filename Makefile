@@ -3,7 +3,7 @@
 # only ever runs inside a Linux DaemonSet, so `build` cross-compiles to
 # linux/amd64 unconditionally — that also makes it work from a macOS or
 # other non-Linux dev machine instead of failing there.
-IMG ?= ghcr.io/azalio/cpi-idle-operator:latest
+IMG ?= ghcr.io/azalio/cpu-idle-operator:latest
 GOOS ?= linux
 GOARCH ?= amd64
 BIN := bin/cpi-idle-agent
