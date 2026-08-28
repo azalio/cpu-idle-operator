@@ -1,0 +1,36 @@
+# The CPU-saturating neighbor. Same CPU requests as benchwork (500m), NO
+# CPU limit, and required co-scheduling onto benchwork's node — the two
+# become sibling pod cgroups under the same Burstable parent, competing
+# for the same cores with equal cpu.weight.
+#
+# stress-ng runs in 60-second rounds with --metrics-brief so the pod log
+# prints a bogo-ops line every minute: that is the evidence that the
+# stressor keeps making progress after it is demoted to the idle tier.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stressor
+  namespace: cpu-idle-example
+  labels:
+    app: stressor
+spec:
+  terminationGracePeriodSeconds: 1
+  affinity:
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app: benchwork
+  containers:
+    - name: stress-ng
+      image: ghcr.io/colinianking/stress-ng@sha256:fb52cee3eb3067cd04f69238f5d9b90edbbda4e8fa310d4fb32452afbd69d716
+      imagePullPolicy: IfNotPresent
+      command:
+        - sh
+        - -c
+        - while true; do stress-ng --cpu 0 --timeout 60s --metrics-brief; done
+      resources:
+        requests:
+          cpu: 500m
+          memory: 64Mi

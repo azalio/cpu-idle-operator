@@ -1,0 +1,56 @@
+# The latency-sensitive foreground service. CPU requests only, NO CPU
+# limit: its share of a contended node comes from cpu.weight (which
+# kubelet derives from requests), and the whole point of the example is
+# that the idle tier protects it without any limit anywhere.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: benchwork
+  namespace: cpu-idle-example
+  labels:
+    app: benchwork
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: benchwork
+  template:
+    metadata:
+      labels:
+        app: benchwork
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: server
+          image: ghcr.io/azalio/cpu-idle-operator-benchwork:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BENCH_ITERATIONS
+              value: "1000000"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 1
+          resources:
+            requests:
+              cpu: 500m
+              memory: 32Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: benchwork
+  namespace: cpu-idle-example
+spec:
+  selector:
+    app: benchwork
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -59,3 +59,26 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # The example's load target (example/benchwork) ships as its own
+      # image so `example/manifests/benchwork.yaml` works out of the box.
+      # Same trigger discipline as the agent image: push-only, never on
+      # pull_request.
+      - name: Compute example image tags
+        id: meta-benchwork
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-benchwork
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+
+      - name: Build and push example benchwork image
+        uses: docker/build-push-action@v6
+        with:
+          context: example/benchwork
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta-benchwork.outputs.tags }}
+          labels: ${{ steps.meta-benchwork.outputs.labels }}

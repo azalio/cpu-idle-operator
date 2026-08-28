@@ -75,6 +75,11 @@ make deploy           # kustomize build config/base | kubectl apply -f -
 itself. Apply one of the samples under `config/samples/` to see the agent
 react to an annotation.
 
+For a complete measured scenario — an HTTP service whose p99 SLO is
+broken by an unlimited `stress-ng` neighbor and recovered by annotating
+that neighbor onto the idle tier, with a pass/fail gate at every step —
+see [`example/`](example/README.md).
+
 `config/base/daemonset.yaml` references `ghcr.io/azalio/cpu-idle-operator`.
 [`.github/workflows/publish.yaml`](.github/workflows/publish.yaml) publishes
 that image to GHCR on every merge to `main` (tags: `latest` and the commit

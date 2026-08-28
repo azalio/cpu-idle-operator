@@ -1,0 +1,94 @@
+# The load generator and the SLO gate in one object. k6 drives a fixed
+# open-model arrival rate (RPS env, default 200) at benchwork's /work for
+# DURATION (default 60s) and enforces the SLO as k6 thresholds:
+# p99 < 50 ms, error rate <= 0.1%, zero dropped iterations. Thresholds
+# failing make k6 exit non-zero, so the Job's terminal state IS the
+# verdict: Complete = SLO met, Failed = SLO violated.
+#
+# Anti-affinity keeps the generator OFF the contended node: measuring
+# from a starved node would corrupt the measurement. This is why the
+# example needs at least two worker nodes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-script
+  namespace: cpu-idle-example
+data:
+  script.js: |
+    import http from 'k6/http';
+    import { check } from 'k6';
+
+    const rps = Number(__ENV.RPS || '200');
+    const duration = __ENV.DURATION || '60s';
+    const target = __ENV.TARGET || 'http://benchwork:8080/work';
+    const sloP99Ms = Number(__ENV.SLO_P99_MS || '50');
+
+    export const options = {
+      discardResponseBodies: true,
+      summaryTrendStats: ['min', 'avg', 'med', 'p(95)', 'p(99)', 'max'],
+      scenarios: {
+        fixed_rps: {
+          executor: 'constant-arrival-rate',
+          rate: rps,
+          timeUnit: '1s',
+          duration,
+          preAllocatedVUs: 512,
+          maxVUs: 1024,
+          gracefulStop: '2s',
+        },
+      },
+      thresholds: {
+        'http_req_duration{name:work}': [`p(99)<${sloP99Ms}`],
+        'http_req_failed{name:work}': ['rate<=0.001'],
+        dropped_iterations: ['count==0'],
+      },
+    };
+
+    export default function () {
+      const response = http.get(target, {
+        timeout: '500ms',
+        tags: { name: 'work' },
+      });
+      check(response, { 'status is 200': (r) => r.status === 200 });
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6
+  namespace: cpu-idle-example
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: k6
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: benchwork
+      containers:
+        - name: k6
+          image: grafana/k6:0.57.0
+          args: ["run", "/scripts/script.js"]
+          env:
+            - name: RPS
+              value: "200"
+            - name: DURATION
+              value: "60s"
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script
