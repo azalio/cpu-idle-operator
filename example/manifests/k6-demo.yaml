@@ -1,0 +1,85 @@
+# Demo mode: one long k6 run with the live web dashboard, instead of
+# three short gated runs. Start it, port-forward the dashboard, and act
+# out the scenario while the audience watches the p99 line: flat under
+# baseline load, jumping when the stressor lands, dropping back the
+# moment the stressor is annotated onto the idle tier — while
+# `kubectl logs -f stressor` in a second pane keeps printing bogo-ops
+# rounds as proof the stressor still runs.
+#
+#   kubectl apply -f manifests/k6-demo.yaml
+#   kubectl -n cpu-idle-example wait --for=condition=ready pod -l app=k6-demo
+#   kubectl -n cpu-idle-example port-forward svc/k6-dashboard 5665:5665
+#   # open http://localhost:5665
+#
+# DEMO=1 disables the script's thresholds (a cumulative verdict over a
+# run that deliberately contains a broken phase would be noise), so this
+# Job's terminal state means nothing — the picture is the point. Delete
+# the Job to stop early; DURATION caps it at 30 minutes otherwise.
+apiVersion: v1
+kind: Service
+metadata:
+  name: k6-dashboard
+  namespace: cpu-idle-example
+spec:
+  selector:
+    app: k6-demo
+  ports:
+    - name: dashboard
+      port: 5665
+      targetPort: 5665
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-demo
+  namespace: cpu-idle-example
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: k6-demo
+    spec:
+      restartPolicy: Never
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: benchwork
+      containers:
+        - name: k6
+          image: grafana/k6:0.57.0
+          # Remote write only fires if Prometheus from ../monitoring is
+          # deployed; without it k6 logs write errors but keeps loading.
+          args: ["run", "-o", "experimental-prometheus-rw", "/scripts/script.js"]
+          env:
+            - name: DEMO
+              value: "1"
+            - name: K6_PROMETHEUS_RW_SERVER_URL
+              value: http://prometheus.monitoring.svc:9090/api/v1/write
+            - name: K6_PROMETHEUS_RW_TREND_AS_NATIVE_HISTOGRAM
+              value: "true"
+            - name: RPS
+              value: "200"
+            - name: DURATION
+              value: "30m"
+            - name: K6_WEB_DASHBOARD
+              value: "true"
+            - name: K6_WEB_DASHBOARD_PERIOD
+              value: "5s"
+          ports:
+            - name: dashboard
+              containerPort: 5665
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 500m
+              memory: 128Mi
+      volumes:
+        - name: script
+          configMap:
+            name: k6-script

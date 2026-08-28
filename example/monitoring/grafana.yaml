@@ -1,0 +1,183 @@
+# Grafana with everything provisioned: the Prometheus datasource and the
+# demo dashboard ship as ConfigMaps, so the pod comes up already showing
+# the three-act picture — no clicking around before a talk. Anonymous
+# viewers are enabled (the dashboard is the demo); admin/admin to edit.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prom-demo
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        jsonData:
+          timeInterval: 5s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: demo
+        folder: ""
+        type: file
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  cpu-idle-demo.json: |
+    {
+      "uid": "cpu-idle-demo",
+      "title": "cpu.idle demo: SLO recovery",
+      "timezone": "browser",
+      "refresh": "5s",
+      "time": {"from": "now-15m", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "type": "timeseries", "title": "HTTP request duration, /work (SLO: p99 < 50 ms)",
+          "gridPos": {"h": 9, "w": 24, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "prom-demo"},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms", "min": 0,
+              "custom": {"lineWidth": 2, "fillOpacity": 8, "thresholdsStyle": {"mode": "line"}},
+              "thresholds": {"mode": "absolute", "steps": [
+                {"color": "green", "value": null}, {"color": "red", "value": 50}
+              ]}
+            },
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "p99"},
+               "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]}
+            ]
+          },
+          "targets": [
+            {"expr": "1000 * histogram_quantile(0.99, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "p99", "refId": "A"},
+            {"expr": "1000 * histogram_quantile(0.95, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "p95", "refId": "B"},
+            {"expr": "1000 * histogram_quantile(0.50, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "median", "refId": "C"}
+          ]
+        },
+        {
+          "id": 2, "type": "timeseries", "title": "Offered load and errors",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 9},
+          "datasource": {"type": "prometheus", "uid": "prom-demo"},
+          "fieldConfig": {
+            "defaults": {"unit": "reqps", "min": 0, "custom": {"lineWidth": 2, "fillOpacity": 8}},
+            "overrides": [
+              {"matcher": {"id": "byName", "options": "errors, %"},
+               "properties": [
+                 {"id": "unit", "value": "percent"},
+                 {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}},
+                 {"id": "custom.axisPlacement", "value": "right"},
+                 {"id": "max", "value": 100}
+               ]}
+            ]
+          },
+          "targets": [
+            {"expr": "rate(k6_http_reqs_total[15s])", "legendFormat": "requests/s", "refId": "A"},
+            {"expr": "100 * k6_http_req_failed_rate{name=\"work\"}", "legendFormat": "errors, %", "refId": "B"}
+          ]
+        },
+        {
+          "id": 3, "type": "timeseries", "title": "Pod CPU, contended node (cores)",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+          "datasource": {"type": "prometheus", "uid": "prom-demo"},
+          "fieldConfig": {
+            "defaults": {"unit": "none", "min": 0, "decimals": 2,
+              "custom": {"lineWidth": 2, "fillOpacity": 25, "stacking": {"mode": "normal"}}}
+          },
+          "targets": [
+            {"expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"cpu-idle-example\", container!=\"\", pod=~\"benchwork.*|stressor\"}[30s]))",
+             "legendFormat": "{{pod}}", "refId": "A"}
+          ]
+        }
+      ],
+      "schemaVersion": 39, "version": 1
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      nodeSelector:
+        role: monitoring
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: monitoring
+          effect: NoSchedule
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.6.0
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /var/lib/grafana/dashboards/cpu-idle-demo.json
+          ports:
+            - name: http
+              containerPort: 3000
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

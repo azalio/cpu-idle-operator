@@ -116,6 +116,53 @@ kubectl -n cpu-idle-example annotate pod stressor cpu.azalio.net/tier-
 Note that a stressor with neither annotation nor limit saturates its
 node; delete it (and the namespace) when you're done.
 
+## Demo mode: one long run with a live dashboard
+
+The three gated runs prove the claim; for showing it to an audience there
+is `manifests/k6-demo.yaml` — a single long k6 run (30 minutes, same 200
+RPS) you act the scenario against while a dashboard draws the p99 line
+live: flat, then a spike when the stressor lands, then the drop the
+moment the annotation is applied.
+
+Two dashboards are available:
+
+- **k6's built-in web dashboard** (zero extra infrastructure): the demo
+  Job already sets `K6_WEB_DASHBOARD=true`; reach it with
+  `kubectl -n cpu-idle-example port-forward svc/k6-dashboard 5665:5665`
+  and open http://localhost:5665.
+- **Prometheus + Grafana** (`../monitoring/`): the demo Job also writes
+  every metric over Prometheus remote write, with trends sent as native
+  histograms — that detail matters, because the plain trend stats k6
+  exports are cumulative over the whole run, and a cumulative p99 decays
+  slowly instead of dropping when the SLO recovers. The provisioned
+  Grafana dashboard ("cpu.idle demo: SLO recovery") charts the
+  30-second-windowed p99/p95/median against the 50 ms SLO line, the
+  offered load and errors, and per-pod CPU of benchwork and the stressor
+  from cadvisor — the stressor's CPU staying busy after the annotation is
+  the "still doing work" half of the story on the same screen.
+
+```bash
+kubectl apply -f monitoring/namespace.yaml
+kubectl apply -f monitoring/prometheus.yaml -f monitoring/grafana.yaml
+kubectl apply -f manifests/k6-demo.yaml
+```
+
+Prometheus and Grafana pin themselves to a node labeled
+`role=monitoring` and tolerate a `dedicated=monitoring:NoSchedule` taint
+— give them a dedicated node so the demo's contention never touches the
+thing measuring it. To reach Grafana from outside, install an
+ingress-nginx controller and apply `monitoring/ingress.yaml` (see the
+comment in that file); Grafana then answers on the controller's
+LoadBalancer IP, anonymous read-only, `admin`/`admin` to edit.
+
+A rehearsal of this exact setup (same cluster as the measured run below):
+windowed p99 held 11-13 ms under baseline, climbed past 140 ms within a
+minute of the stressor starting, and was back under 20 ms within ~30
+seconds of the annotation — while the stressor kept consuming all
+leftover CPU. Stop the demo with
+`kubectl -n cpu-idle-example delete job k6-demo` (its thresholds are
+disabled via `DEMO=1`, so this Job's exit state means nothing).
+
 ## A measured run
 
 Recorded 2026-08-28 on Yandex Managed Service for Kubernetes 1.35.1: two

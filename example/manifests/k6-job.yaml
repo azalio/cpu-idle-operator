@@ -37,7 +37,11 @@ data:
           gracefulStop: '2s',
         },
       },
-      thresholds: {
+      // DEMO=1 (set by k6-demo.yaml) drops the thresholds: a demo run
+      // spans all three acts in one timeline, so a cumulative pass/fail
+      // over the whole run would be meaningless there. The gated runs
+      // keep them and keep the Job-state-as-verdict semantics.
+      thresholds: __ENV.DEMO ? {} : {
         'http_req_duration{name:work}': [`p(99)<${sloP99Ms}`],
         'http_req_failed{name:work}': ['rate<=0.001'],
         dropped_iterations: ['count==0'],
