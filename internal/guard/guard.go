@@ -1,0 +1,285 @@
+// Package guard implements the node guard: a per-node control loop that
+// suppresses idle-tier pods' CPU while the node's non-idle load is above a
+// threshold, and lets them run again once it drops back.
+//
+// Why this exists: cpu.idle removes a neighbor from *time-sharing*
+// arbitration, but not from wakeup-placement heuristics (SIS_UTIL's scan
+// depth is computed from PELT utilization, which cannot tell idle cycles
+// from normal ones), not from SMT/LLC sharing, and not from the service's
+// own queueing once the node runs near its capacity. Measured on a
+// saturated node, an idle-tier stress-ng that was only getting 0.2 cores
+// still tripled the foreground's p99 — while harvesting less than 3% of
+// the node. Past ~70% non-idle utilization there is nothing left worth
+// harvesting, so the cheapest correct move is to stop the idle tier
+// entirely until the pressure passes. That is what this guard does.
+//
+// The mechanism stays within this operator's contract: the guard writes
+// exactly one of the four knob files the agent already owns — cpu.max on
+// the pod cgroup — and only for idle-tier pods that declare no CPU limit
+// of their own, so the restore value is always the kubelet default
+// ("max 100000") and the loop needs no persisted state. Every tick
+// re-derives the desired cpu.max for every such pod from the current
+// temperature and converges the file if it differs; agent restarts,
+// late-arriving pods and deleted cgroups all fall out of that idempotence
+// instead of needing special cases.
+package guard
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/record"
+
+	"github.com/azalio/cpi-idle-operator/internal/annotations"
+	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpi-idle-operator/internal/qos"
+)
+
+// RestoreValue is what cpu.max reads on a pod cgroup with no CPU limit —
+// the value the guard restores when the node cools down. The guard refuses
+// to touch pods with a positive CPU limit precisely so that this constant
+// is always the correct restore value (see the package comment).
+const RestoreValue = "max 100000"
+
+// Config carries the guard's tunables, parsed from the agent's flags.
+type Config struct {
+	// High is the non-idle utilization fraction (0..1] above which the
+	// guard suppresses idle-tier pods. Zero or negative disables the guard.
+	High float64
+	// Low is the fraction below which suppression is lifted. Must be
+	// below High; the gap is the hysteresis band.
+	Low float64
+	// Period is the sampling interval.
+	Period time.Duration
+	// FloorQuota is the cpu.max value written while suppressed, e.g.
+	// "10000 100000" for 10ms of CPU per 100ms period across the pod.
+	FloorQuota string
+
+	CgroupRoot   string
+	KubepodsName string
+	Driver       cgroup.Driver
+	NodeName     string
+}
+
+// Enabled reports whether the parsed configuration turns the guard on.
+func (c Config) Enabled() bool { return c.High > 0 }
+
+// decider is the hysteresis state machine. A transition needs two
+// consecutive samples on the far side of the threshold, so a single noisy
+// sample cannot flap multi-pod cgroup writes.
+type decider struct {
+	hot    bool
+	streak int
+}
+
+// observe feeds one utilization sample and reports the (possibly new)
+// temperature.
+func (d *decider) observe(util, high, low float64) bool {
+	crossed := (!d.hot && util > high) || (d.hot && util < low)
+	if crossed {
+		d.streak++
+	} else {
+		d.streak = 0
+	}
+	if d.streak >= 2 {
+		d.hot = !d.hot
+		d.streak = 0
+	}
+	return d.hot
+}
+
+// Guard is the running control loop. Construct with New and start Run in
+// its own goroutine; it stops when ctx is done and performs no writes
+// after that (same contract as the reconciler).
+type Guard struct {
+	cfg    Config
+	lister corelisters.PodLister
+	events record.EventRecorder
+	logger *slog.Logger
+
+	dec decider
+
+	// readTotalUsage and numCPU are injectable for tests.
+	readTotalUsage func() (uint64, error)
+	numCPU         func() int
+
+	prevTotal   uint64
+	prevIdle    map[string]uint64 // pod UID -> usage_usec at previous tick
+	prevSampled time.Time
+}
+
+// New builds a Guard. lister must be node-scoped (the agent's informer
+// already is); events receives IdleSuppressed/IdleRestored pod events.
+func New(cfg Config, lister corelisters.PodLister, events record.EventRecorder, logger *slog.Logger) *Guard {
+	g := &Guard{
+		cfg:      cfg,
+		lister:   lister,
+		events:   events,
+		logger:   logger,
+		prevIdle: make(map[string]uint64),
+	}
+	g.readTotalUsage = func() (uint64, error) {
+		return readUsageUsec(filepath.Join(cfg.CgroupRoot, "cpu.stat"))
+	}
+	g.numCPU = runtime.NumCPU
+	return g
+}
+
+// Run executes the sampling loop until ctx is done.
+func (g *Guard) Run(ctx context.Context) {
+	ticker := time.NewTicker(g.cfg.Period)
+	defer ticker.Stop()
+	g.logger.Info("node guard started",
+		"high", g.cfg.High, "low", g.cfg.Low,
+		"period", g.cfg.Period.String(), "floor", g.cfg.FloorQuota)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			g.tick(ctx)
+		}
+	}
+}
+
+// tick takes one sample and converges every eligible pod's cpu.max to the
+// value the current temperature calls for.
+func (g *Guard) tick(ctx context.Context) {
+	if ctx.Err() != nil {
+		return
+	}
+	pods, err := g.lister.List(labels.Everything())
+	if err != nil {
+		g.logger.Error("guard: list pods", "error", err)
+		return
+	}
+
+	total, err := g.readTotalUsage()
+	if err != nil {
+		g.logger.Error("guard: read node cpu.stat", "error", err)
+		return
+	}
+
+	now := time.Now()
+	idlePods, idleUsage := g.idlePodsUsage(pods)
+
+	if !g.prevSampled.IsZero() {
+		elapsed := now.Sub(g.prevSampled).Microseconds()
+		if elapsed > 0 {
+			var idleDelta uint64
+			for uid, usage := range idleUsage {
+				if prev, ok := g.prevIdle[uid]; ok && usage >= prev {
+					idleDelta += usage - prev
+				}
+			}
+			totalDelta := total - g.prevTotal
+			nonIdle := float64(totalDelta) - float64(idleDelta)
+			util := nonIdle / float64(elapsed) / float64(g.numCPU())
+			hot := g.dec.observe(util, g.cfg.High, g.cfg.Low)
+			g.converge(hot, idlePods)
+			g.logger.Debug("guard tick", "non_idle_util", fmt.Sprintf("%.3f", util), "hot", hot)
+		}
+	}
+
+	g.prevTotal = total
+	g.prevIdle = idleUsage
+	g.prevSampled = now
+}
+
+// idlePodsUsage returns the running idle-tier pods without a CPU limit
+// (the only pods the guard may touch) and the current cpu.stat usage of
+// every idle-tier pod, keyed by UID, for the utilization math.
+func (g *Guard) idlePodsUsage(pods []*corev1.Pod) ([]*corev1.Pod, map[string]uint64) {
+	var eligible []*corev1.Pod
+	usage := make(map[string]uint64)
+	for _, pod := range pods {
+		if pod.Annotations[annotations.TierKey] != annotations.TierValueIdle {
+			continue
+		}
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		dir, err := cgroup.PodCgroupPath(g.cfg.CgroupRoot, g.cfg.KubepodsName, g.cfg.Driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
+		if err != nil {
+			continue
+		}
+		if u, err := readUsageUsec(filepath.Join(dir, "cpu.stat")); err == nil {
+			usage[string(pod.UID)] = u
+		}
+		if hasPositiveCPULimit(pod.Spec) {
+			// A pod with its own quota already has a ceiling and, more to
+			// the point, a restore value this stateless loop cannot know.
+			continue
+		}
+		eligible = append(eligible, pod)
+	}
+	return eligible, usage
+}
+
+// converge writes the temperature's desired cpu.max to every eligible pod
+// whose file differs, emitting one event per actual change.
+func (g *Guard) converge(hot bool, pods []*corev1.Pod) {
+	desired := RestoreValue
+	reason, verb := "IdleRestored", "restored"
+	if hot {
+		desired = g.cfg.FloorQuota
+		reason, verb = "IdleSuppressed", "suppressed"
+	}
+	for _, pod := range pods {
+		dir, err := cgroup.PodCgroupPath(g.cfg.CgroupRoot, g.cfg.KubepodsName, g.cfg.Driver, qos.ToCgroupClass(qos.ClassOf(pod.Spec)), string(pod.UID))
+		if err != nil {
+			continue
+		}
+		current, err := cgroup.ReadKnob(dir, "cpu.max")
+		if err != nil || current == desired {
+			continue
+		}
+		if err := cgroup.WriteKnob(g.cfg.CgroupRoot, g.cfg.KubepodsName, dir, "cpu.max", desired); err != nil {
+			g.logger.Error("guard: write cpu.max", "pod", pod.Name, "error", err)
+			continue
+		}
+		g.logger.Info("guard: cpu.max "+verb, "pod", pod.Namespace+"/"+pod.Name, "value", desired)
+		if g.events != nil {
+			g.events.Eventf(pod, corev1.EventTypeNormal, reason,
+				"node guard %s idle-tier CPU (cpu.max=%q, node=%s)", verb, desired, g.cfg.NodeName)
+		}
+	}
+}
+
+// hasPositiveCPULimit mirrors internal/tier's check: any container or init
+// container declaring a positive CPU limit makes the pod ineligible.
+func hasPositiveCPULimit(spec corev1.PodSpec) bool {
+	all := make([]corev1.Container, 0, len(spec.Containers)+len(spec.InitContainers))
+	all = append(all, spec.Containers...)
+	all = append(all, spec.InitContainers...)
+	for _, c := range all {
+		if limit, ok := c.Resources.Limits[corev1.ResourceCPU]; ok && !limit.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+// readUsageUsec extracts usage_usec from a cgroup v2 cpu.stat file.
+func readUsageUsec(path string) (uint64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "usage_usec "); ok {
+			return strconv.ParseUint(strings.TrimSpace(rest), 10, 64)
+		}
+	}
+	return 0, fmt.Errorf("guard: no usage_usec in %s", path)
+}

@@ -36,6 +36,15 @@ func TestVC1NoForbiddenComponents(t *testing.T) {
 			if d.Name() == ".git" || d.Name() == ".map" {
 				return filepath.SkipDir
 			}
+			// A nested Go module (e.g. example/benchwork, the example's
+			// standalone load target) is not part of the agent: HC-4
+			// constrains this module's one binary, not every auxiliary
+			// program shipped in the repository.
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {

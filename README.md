@@ -75,7 +75,7 @@ make deploy           # kustomize build config/base | kubectl apply -f -
 itself. Apply one of the samples under `config/samples/` to see the agent
 react to an annotation.
 
-For a complete measured scenario — an HTTP service whose p99 SLO is
+For a complete measured scenario — an HTTP service whose latency SLO is
 broken by an unlimited `stress-ng` neighbor and recovered by annotating
 that neighbor onto the idle tier, with a pass/fail gate at every step —
 see [`example/`](example/README.md).
@@ -150,6 +150,44 @@ under either tier, a resize attempt from VPA — or from `kubectl` directly
 — will be rejected by the kernel with `EINVAL`. The agent detects and
 reports this conflict; it does not resolve it, retry around it, or revert
 the tier to let the resize through.
+
+## The node guard: when the node runs hot, the idle tier stops
+
+`cpu.idle` removes a neighbor from time-sharing arbitration, but not from
+everything else: the kernel's wakeup-placement heuristics compute their
+search depth from PELT utilization, which cannot tell idle-tier cycles
+from normal ones; SMT siblings still share physical cores; and past
+~70% non-idle utilization the service's own queueing amplifies every
+leftover microsecond of interference. Measured on a saturated node, an
+idle-tier stress-ng squeezed down to 0.2 cores still pushed the
+foreground's latency SLO gate (see [`example/`](example/README.md)) from
+passing to failing — while harvesting under 3% of the node. Past that
+point there is nothing worth harvesting, so the correct move is to stop
+the idle tier until the pressure passes.
+
+The agent ships that control loop, off by default. Enable it with
+`--guard-high` (a non-idle CPU utilization fraction):
+
+```
+--guard-high=0.70    # suppress idle-tier pods above 70% non-idle load
+--guard-low=0.60     # lift suppression below 60% (hysteresis band)
+--guard-period=5s    # sampling interval
+--guard-floor="10000 100000"   # cpu.max while suppressed (0.1 CPU)
+```
+
+Each tick the guard reads the node's `cpu.stat`, subtracts the idle-tier
+pods' own usage, and converges every *running, no-CPU-limit, idle-tier*
+pod's `cpu.max` to what the temperature calls for: the floor quota while
+hot, the kubelet default (`max 100000`) once cool. Two consecutive
+samples are required per transition, so one noisy sample never flips the
+node. Pods that declare their own CPU limit are left alone — their
+`cpu.max` belongs to kubelet, and the stateless restore value would be
+wrong for them. Transitions are visible as `IdleSuppressed` /
+`IdleRestored` Events on the affected pods.
+
+The loop is deliberately stateless: agent restarts, pods that appear
+while the node is hot, and cgroups that vanish mid-write all fall out of
+per-tick convergence instead of needing special cases.
 
 ## Security Boundaries
 

@@ -22,6 +22,9 @@ const (
 	defaultResyncPeriod = 60 * time.Second
 	defaultMetricsAddr  = ":8080"
 	defaultHealthAddr   = ":8081"
+	defaultGuardLow     = 0.60
+	defaultGuardPeriod  = 5 * time.Second
+	defaultGuardFloor   = "10000 100000"
 	nodeNameEnvVar      = "NODE_NAME"
 )
 
@@ -52,6 +55,15 @@ type Config struct {
 	MetricsAddr string
 	// HealthAddr is the listen address for the health/readiness endpoint.
 	HealthAddr string
+	// GuardHigh enables the node guard when positive: the non-idle CPU
+	// utilization fraction above which idle-tier pods are suppressed.
+	GuardHigh float64
+	// GuardLow is the fraction below which suppression is lifted.
+	GuardLow float64
+	// GuardPeriod is the guard's sampling interval.
+	GuardPeriod time.Duration
+	// GuardFloor is the cpu.max value written while suppressed.
+	GuardFloor string
 }
 
 // ParseFlags parses argv (excluding the program name) into a Config,
@@ -69,6 +81,10 @@ func ParseFlags(argv []string) (Config, error) {
 	revertAll := fs.Bool("revert-all", false, "run a one-shot revert of all tiers on this node, then exit")
 	metricsAddr := fs.String("metrics-addr", defaultMetricsAddr, "listen address for the Prometheus metrics endpoint")
 	healthAddr := fs.String("health-addr", defaultHealthAddr, "listen address for the health/readiness endpoint")
+	guardHigh := fs.Float64("guard-high", 0, "node guard: non-idle CPU utilization fraction above which idle-tier pods are suppressed (0 disables the guard)")
+	guardLow := fs.Float64("guard-low", defaultGuardLow, "node guard: fraction below which suppression is lifted")
+	guardPeriod := fs.Duration("guard-period", defaultGuardPeriod, "node guard: sampling interval")
+	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods")
 
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, err
@@ -76,6 +92,15 @@ func ParseFlags(argv []string) (Config, error) {
 
 	if *nodeName == "" {
 		return Config{}, ErrEmptyNodeName
+	}
+
+	if *guardHigh > 0 {
+		if *guardHigh > 1 {
+			return Config{}, fmt.Errorf("--guard-high must be in (0, 1], got %v", *guardHigh)
+		}
+		if *guardLow <= 0 || *guardLow >= *guardHigh {
+			return Config{}, fmt.Errorf("--guard-low must be in (0, --guard-high), got %v", *guardLow)
+		}
 	}
 
 	return Config{
@@ -86,5 +111,9 @@ func ParseFlags(argv []string) (Config, error) {
 		RevertAll:    *revertAll,
 		MetricsAddr:  *metricsAddr,
 		HealthAddr:   *healthAddr,
+		GuardHigh:    *guardHigh,
+		GuardLow:     *guardLow,
+		GuardPeriod:  *guardPeriod,
+		GuardFloor:   *guardFloor,
 	}, nil
 }

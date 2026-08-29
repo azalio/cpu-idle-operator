@@ -25,6 +25,7 @@ import (
 	"github.com/azalio/cpi-idle-operator/internal/apply"
 	"github.com/azalio/cpi-idle-operator/internal/config"
 	"github.com/azalio/cpi-idle-operator/internal/envgate"
+	"github.com/azalio/cpi-idle-operator/internal/guard"
 	"github.com/azalio/cpi-idle-operator/internal/observe"
 	"github.com/azalio/cpi-idle-operator/internal/tier"
 )
@@ -198,7 +199,20 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	var runErr error
 	if gateResult.Ready {
 		reconciler := NewReconciler(informer.Lister(), applier, lc.Config.CgroupRoot, lc.Config.KubepodsName, gateResult.Driver, metrics, lc.Config.NodeName)
-		runErr = lc.runReady(ctx, informer, reconciler, health)
+		var nodeGuard *guard.Guard
+		if guardCfg := (guard.Config{
+			High:         lc.Config.GuardHigh,
+			Low:          lc.Config.GuardLow,
+			Period:       lc.Config.GuardPeriod,
+			FloorQuota:   lc.Config.GuardFloor,
+			CgroupRoot:   lc.Config.CgroupRoot,
+			KubepodsName: lc.Config.KubepodsName,
+			Driver:       gateResult.Driver,
+			NodeName:     lc.Config.NodeName,
+		}); guardCfg.Enabled() {
+			nodeGuard = guard.New(guardCfg, informer.Lister(), eventRecorder, logger)
+		}
+		runErr = lc.runReady(ctx, informer, reconciler, health, nodeGuard)
 	} else {
 		runErr = lc.runDegraded(ctx, informer, observe.NewEventRecorder(eventRecorder))
 	}
@@ -225,7 +239,7 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 // every key the initial List delivers is queued exactly like a live event
 // — marks Health synced once that completes (VC4), then blocks draining
 // the workqueue through reconciler.Reconcile until ctx is done.
-func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconciler *Reconciler, health *Health) error {
+func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconciler *Reconciler, health *Health, nodeGuard *guard.Guard) error {
 	if !informer.Start(ctx) {
 		// Intent: Start's own doc comment says it returns false only when
 		// ctx was done before the cache finished syncing — i.e. this path
@@ -236,6 +250,11 @@ func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconcile
 		return nil
 	}
 	health.SetSynced(true)
+	if nodeGuard != nil {
+		// The guard runs beside the reconcile loop and stops with the same
+		// ctx; like the reconciler it performs no writes past cancellation.
+		go nodeGuard.Run(ctx)
+	}
 	return informer.Run(ctx, reconciler.Reconcile)
 }
 
