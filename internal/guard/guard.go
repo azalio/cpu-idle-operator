@@ -61,9 +61,19 @@ type Config struct {
 	Low float64
 	// Period is the sampling interval.
 	Period time.Duration
-	// FloorQuota is the cpu.max value written while suppressed, e.g.
-	// "10000 100000" for 10ms of CPU per 100ms period across the pod.
+	// FloorQuota is the cpu.max value written while suppressed in
+	// throttle mode, e.g. "10000 100000" for 10ms of CPU per 100ms period.
 	FloorQuota string
+	// Freeze selects the suppression mechanism. When true (the default)
+	// the guard writes cgroup.freeze=1, stopping the pod entirely; when
+	// false it throttles via cpu.max=FloorQuota. Freeze is the default
+	// because throttling was measured insufficient at the edge: even a
+	// pod quota of 1% of one CPU wakes every stress worker once per
+	// period, and those bursts alone kept the foreground's tail an order
+	// of magnitude above its solo level. A frozen pod costs exactly zero.
+	// The trade-off: liveness/readiness probes of a frozen pod fail
+	// (batch pods rarely have them); document, don't hide it.
+	Freeze bool
 
 	CgroupRoot   string
 	KubepodsName string
@@ -226,13 +236,23 @@ func (g *Guard) idlePodsUsage(pods []*corev1.Pod) ([]*corev1.Pod, map[string]uin
 	return eligible, usage
 }
 
-// converge writes the temperature's desired cpu.max to every eligible pod
-// whose file differs, emitting one event per actual change.
+// converge writes the temperature's desired knob value to every eligible
+// pod whose file differs, emitting one event per actual change. In freeze
+// mode the knob is cgroup.freeze (1 hot / 0 cool); in throttle mode it is
+// cpu.max (FloorQuota hot / the kubelet default cool).
 func (g *Guard) converge(hot bool, pods []*corev1.Pod) {
-	desired := RestoreValue
+	knob := "cgroup.freeze"
+	desired := "0"
+	if !g.cfg.Freeze {
+		knob = "cpu.max"
+		desired = RestoreValue
+	}
 	reason, verb := "IdleRestored", "restored"
 	if hot {
-		desired = g.cfg.FloorQuota
+		desired = "1"
+		if !g.cfg.Freeze {
+			desired = g.cfg.FloorQuota
+		}
 		reason, verb = "IdleSuppressed", "suppressed"
 	}
 	for _, pod := range pods {
@@ -240,18 +260,18 @@ func (g *Guard) converge(hot bool, pods []*corev1.Pod) {
 		if err != nil {
 			continue
 		}
-		current, err := cgroup.ReadKnob(dir, "cpu.max")
+		current, err := cgroup.ReadKnob(dir, knob)
 		if err != nil || current == desired {
 			continue
 		}
-		if err := cgroup.WriteKnob(g.cfg.CgroupRoot, g.cfg.KubepodsName, dir, "cpu.max", desired); err != nil {
-			g.logger.Error("guard: write cpu.max", "pod", pod.Name, "error", err)
+		if err := cgroup.WriteKnob(g.cfg.CgroupRoot, g.cfg.KubepodsName, dir, knob, desired); err != nil {
+			g.logger.Error("guard: write "+knob, "pod", pod.Name, "error", err)
 			continue
 		}
-		g.logger.Info("guard: cpu.max "+verb, "pod", pod.Namespace+"/"+pod.Name, "value", desired)
+		g.logger.Info("guard: "+knob+" "+verb, "pod", pod.Namespace+"/"+pod.Name, "value", desired)
 		if g.events != nil {
 			g.events.Eventf(pod, corev1.EventTypeNormal, reason,
-				"node guard %s idle-tier CPU (cpu.max=%q, node=%s)", verb, desired, g.cfg.NodeName)
+				"node guard %s idle-tier CPU (%s=%q, node=%s)", verb, knob, desired, g.cfg.NodeName)
 		}
 	}
 }

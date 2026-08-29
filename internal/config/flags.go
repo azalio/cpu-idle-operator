@@ -62,8 +62,12 @@ type Config struct {
 	GuardLow float64
 	// GuardPeriod is the guard's sampling interval.
 	GuardPeriod time.Duration
-	// GuardFloor is the cpu.max value written while suppressed.
+	// GuardFloor is the cpu.max value written while suppressed in
+	// throttle mode.
 	GuardFloor string
+	// GuardFreeze selects freeze-mode suppression (cgroup.freeze) instead
+	// of cpu.max throttling.
+	GuardFreeze bool
 }
 
 // ParseFlags parses argv (excluding the program name) into a Config,
@@ -84,7 +88,8 @@ func ParseFlags(argv []string) (Config, error) {
 	guardHigh := fs.Float64("guard-high", 0, "node guard: non-idle CPU utilization fraction above which idle-tier pods are suppressed (0 disables the guard)")
 	guardLow := fs.Float64("guard-low", defaultGuardLow, "node guard: fraction below which suppression is lifted")
 	guardPeriod := fs.Duration("guard-period", defaultGuardPeriod, "node guard: sampling interval")
-	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods")
+	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods (throttle mode)")
+	guardFreeze := fs.Bool("guard-freeze", true, "node guard: suppress via cgroup.freeze instead of cpu.max throttling")
 
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, err
@@ -115,5 +120,6 @@ func ParseFlags(argv []string) (Config, error) {
 		GuardLow:     *guardLow,
 		GuardPeriod:  *guardPeriod,
 		GuardFloor:   *guardFloor,
+		GuardFreeze:  *guardFreeze,
 	}, nil
 }

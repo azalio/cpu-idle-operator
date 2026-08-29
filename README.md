@@ -172,13 +172,21 @@ The agent ships that control loop, off by default. Enable it with
 --guard-high=0.70    # suppress idle-tier pods above 70% non-idle load
 --guard-low=0.60     # lift suppression below 60% (hysteresis band)
 --guard-period=5s    # sampling interval
---guard-floor="10000 100000"   # cpu.max while suppressed (0.1 CPU)
+--guard-freeze=true  # suppress via cgroup.freeze (default; see below)
+--guard-floor="10000 100000"   # cpu.max while suppressed (throttle mode)
 ```
 
 Each tick the guard reads the node's `cpu.stat`, subtracts the idle-tier
 pods' own usage, and converges every *running, no-CPU-limit, idle-tier*
-pod's `cpu.max` to what the temperature calls for: the floor quota while
-hot, the kubelet default (`max 100000`) once cool. Two consecutive
+pod's suppression knob to what the temperature calls for: frozen
+(`cgroup.freeze=1`) while hot, running again once cool — or, with
+`--guard-freeze=false`, throttled via `cpu.max` to the floor quota
+instead. Freeze is the default because throttling was measured
+insufficient at the edge: even a 1%-of-one-CPU quota wakes every stress
+worker once per period, and those bursts alone kept the foreground's
+tail an order of magnitude above its solo level, while a frozen pod
+costs exactly zero. The trade-off: liveness and readiness probes of a
+frozen pod fail (batch pods rarely carry them). Two consecutive
 samples are required per transition, so one noisy sample never flips the
 node. Pods that declare their own CPU limit are left alone — their
 `cpu.max` belongs to kubelet, and the stateless restore value would be
