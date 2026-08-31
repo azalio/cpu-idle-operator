@@ -27,10 +27,10 @@ func TestVC1MetricFamiliesPresent(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"cpi_pods_in_tier":          false,
-		"cpi_tier_apply_total":      false,
-		"cpi_resync_drift_total":    false,
-		"cpi_environment_gate_info": false,
+		"cpu_pods_in_tier":          false,
+		"cpu_tier_apply_total":      false,
+		"cpu_resync_drift_total":    false,
+		"cpu_environment_gate_info": false,
 	}
 	for _, family := range families {
 		if _, ok := want[family.GetName()]; ok {

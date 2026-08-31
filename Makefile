@@ -6,7 +6,7 @@
 IMG ?= ghcr.io/azalio/cpu-idle-operator:latest
 GOOS ?= linux
 GOARCH ?= amd64
-BIN := bin/cpi-idle-agent
+BIN := bin/cpu-idle-agent
 
 # The Helm chart under HELM_CHART is the source of truth for config/base
 # (see the "manifests" target below): config/base is generated output, not
@@ -14,9 +14,9 @@ BIN := bin/cpi-idle-agent
 # render is reproducible regardless of who runs it or what's installed in a
 # live cluster -- `helm template` never talks to a cluster, these are just
 # name/namespace substitutions.
-HELM_CHART := deploy/helm/cpi-idle-operator
-HELM_RELEASE := cpi-idle-operator
-HELM_NAMESPACE := cpi-idle-system
+HELM_CHART := deploy/helm/cpu-idle-operator
+HELM_RELEASE := cpu-idle-operator
+HELM_NAMESPACE := cpu-idle-system
 CONFIG_BASE := config/base
 
 .PHONY: build
@@ -32,7 +32,7 @@ deploy:
 	kustomize build config/base | kubectl apply -f -
 
 # manifests renders config/base from the Helm chart. Run this after editing
-# anything under deploy/helm/cpi-idle-operator and commit the result --
+# anything under deploy/helm/cpu-idle-operator and commit the result --
 # config/base itself must never be hand-edited, see check-manifests-drift.
 #
 # The render is normalized before it is written: different Helm versions place
@@ -64,6 +64,6 @@ manifests:
 .PHONY: check-manifests-drift
 check-manifests-drift: manifests
 	@if ! git diff --exit-code -- $(CONFIG_BASE); then \
-		echo "ERROR: config/base is out of date with deploy/helm/cpi-idle-operator. Run 'make manifests' and commit the result." >&2; \
+		echo "ERROR: config/base is out of date with deploy/helm/cpu-idle-operator. Run 'make manifests' and commit the result." >&2; \
 		exit 1; \
 	fi

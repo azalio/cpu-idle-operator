@@ -5,13 +5,13 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: cpi-idle-agent
-  namespace: cpi-idle-system
+  name: cpu-idle-agent
+  namespace: cpu-idle-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cpi-idle-agent
+  name: cpu-idle-agent
 rules:
   # The agent's informer watches every pod cluster-wide and filters to its
   # own node via fieldSelector — the watch itself is still a cluster-scoped
@@ -28,12 +28,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: cpi-idle-agent
+  name: cpu-idle-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cpi-idle-agent
+  name: cpu-idle-agent
 subjects:
   - kind: ServiceAccount
-    name: cpi-idle-agent
-    namespace: cpi-idle-system
+    name: cpu-idle-agent
+    namespace: cpu-idle-system

@@ -13,11 +13,11 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/config"
-	"github.com/azalio/cpi-idle-operator/internal/envgate"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/envgate"
 )
 
 // mustListen binds an ephemeral loopback port so a test can hand Lifecycle

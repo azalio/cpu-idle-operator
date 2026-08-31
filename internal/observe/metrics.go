@@ -74,22 +74,22 @@ func NewMetrics(registry *prometheus.Registry) *Metrics {
 
 	m := &Metrics{
 		PodsInTier: newGaugeVec(prometheus.GaugeOpts{
-			Name: "cpi_pods_in_tier",
+			Name: "cpu_pods_in_tier",
 			Help: "Number of pods currently in each CPU tier on this node.",
 		}, []string{"node", "namespace", "qos_class", "tier"}),
 
 		TierApplyTotal: newCounterVec(prometheus.CounterOpts{
-			Name: "cpi_tier_apply_total",
+			Name: "cpu_tier_apply_total",
 			Help: "Count of CPU-tier apply attempts, by outcome (result) and reason.",
 		}, []string{"node", "namespace", "qos_class", "result", "reason"}),
 
 		ResyncDriftTotal: newCounterVec(prometheus.CounterOpts{
-			Name: "cpi_resync_drift_total",
+			Name: "cpu_resync_drift_total",
 			Help: "Count of resync passes where actual cgroup state disagreed with the desired state from annotations.",
 		}, []string{"node", "namespace", "qos_class"}),
 
 		EnvironmentGateInfo: newGaugeVec(prometheus.GaugeOpts{
-			Name: "cpi_environment_gate_info",
+			Name: "cpu_environment_gate_info",
 			Help: "1 while this node fails the environment gate, labeled with the reason; the series is absent once the node passes.",
 		}, []string{"node", "reason"}),
 	}

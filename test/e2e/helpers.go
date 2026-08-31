@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e holds cpi-idle-operator's kind-based end-to-end tests.
+// Package e2e holds cpu-idle-operator's kind-based end-to-end tests.
 //
 // Every file here is gated behind the "e2e" build tag: `go build ./...`,
 // `go vet ./...` and a plain `go test ./...` never compile this package, so
@@ -14,11 +14,11 @@
 // cluster --config`. To run this suite locally:
 //
 //	KIND_EXPERIMENTAL_PROVIDER=podman kind create cluster \
-//	    --name cpi-idle-e2e --config test/e2e/kind-config.yaml
+//	    --name cpu-idle-e2e --config test/e2e/kind-config.yaml
 //	podman build -t ghcr.io/azalio/cpu-idle-operator:latest .
-//	podman save ghcr.io/azalio/cpu-idle-operator:latest -o /tmp/cpi-idle.tar
+//	podman save ghcr.io/azalio/cpu-idle-operator:latest -o /tmp/cpu-idle.tar
 //	KIND_EXPERIMENTAL_PROVIDER=podman kind load image-archive \
-//	    /tmp/cpi-idle.tar --name cpi-idle-e2e
+//	    /tmp/cpu-idle.tar --name cpu-idle-e2e
 //	go test -tags e2e -v ./test/e2e/...
 //
 // (`kind load docker-image` does not see podman-built images reliably —
@@ -44,15 +44,15 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 const (
 	// clusterNameEnvVar overrides the kind cluster name this suite targets.
-	clusterNameEnvVar = "CPI_E2E_KIND_CLUSTER"
+	clusterNameEnvVar = "CPU_E2E_KIND_CLUSTER"
 	// clusterNameDefault matches the --name this repo's CI and the doc
 	// comment above both use, so the common case needs no env var at all.
-	clusterNameDefault = "cpi-idle-e2e"
+	clusterNameDefault = "cpu-idle-e2e"
 
 	// prodCgroupRoot is exactly the --cgroup-root value
 	// config/base/daemonset.yaml ships (its default, see internal/config's
@@ -71,14 +71,14 @@ const (
 	// "kubelet.slice" top-level slice and prefixes every kubepods
 	// slice/directory name under it with "kubelet-". config/base itself
 	// must keep shipping the plain defaults (correct for a real production
-	// kubelet, see README's Supported Environments section) — these
+	// kubelet, see README's Requirements section) — these
 	// constants exist only so this suite can exercise the positive AC-10
 	// scenario for real on a kind node.
 	kindCgroupRoot   = prodCgroupRoot + "/kubelet.slice"
 	kindKubepodsName = "kubelet-kubepods"
 
-	agentNamespace     = "cpi-idle-system"
-	agentDaemonSet     = "cpi-idle-agent"
+	agentNamespace     = "cpu-idle-system"
+	agentDaemonSet     = "cpu-idle-agent"
 	agentLabelSelector = "app.kubernetes.io/component=agent"
 
 	// podReadyTimeout matches hack/stand-probe.sh's own pod-wait timeout
@@ -333,7 +333,7 @@ func waitForPod(t *testing.T, ctx context.Context, clientset *kubernetes.Clients
 	return last
 }
 
-// waitForAgentPodRunning polls until this node's cpi-idle-agent DaemonSet
+// waitForAgentPodRunning polls until this node's cpu-idle-agent DaemonSet
 // pod exists and reaches phase Running. It deliberately does not wait for
 // Ready: whenever the environment gate fails (Open Question 1's measured
 // case on kind), Ready never happens by design (AC-6), so waiting for it
@@ -398,7 +398,7 @@ func forcePullPolicyNever(t *testing.T) {
 // of config/base's own production-correct defaults, which never converge
 // on a kind node. config/base/daemonset.yaml itself is never changed for
 // this — production clusters must keep the plain defaults (README's
-// Supported Environments section); this patch exists purely so this suite
+// Requirements section); this patch exists purely so this suite
 // can exercise the positive AC-10 scenario for real on kind.
 //
 // args[0] is always "--cgroup-root=..." (config/base/daemonset.yaml's own

@@ -8,10 +8,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
-	"github.com/azalio/cpi-idle-operator/internal/tier"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // Revert clears state's active CPU tiers from pod's cgroup, restoring

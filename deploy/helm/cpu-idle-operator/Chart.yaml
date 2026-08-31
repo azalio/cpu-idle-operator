@@ -1,5 +1,5 @@
 apiVersion: v2
-name: cpi-idle-operator
+name: cpu-idle-operator
 description: >-
   Node agent DaemonSet giving pods opt-in access to two cgroup v2 CPU tiers
   (cpu.idle, cpu.max.burst) through pod annotations. Source of truth for
@@ -7,4 +7,4 @@ description: >-
 type: application
 version: 0.1.0
 appVersion: "latest"
-home: https://github.com/azalio/cpi-idle-operator
+home: https://github.com/azalio/cpu-idle-operator

@@ -40,9 +40,9 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
 // RestoreValue is what cpu.max reads on a pod cgroup with no CPU limit —

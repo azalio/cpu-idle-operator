@@ -6,10 +6,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
-// Recorder pairs a cpi_tier_apply_total increment with exactly one Event on
+// Recorder pairs a cpu_tier_apply_total increment with exactly one Event on
 // the pod involved, for each of its four outcome methods — the single
 // enforcement point for CCR-1 ("every real cgroup change carries an Event
 // and a metric increment, never one without the other"). Every other
@@ -87,7 +87,7 @@ func (r *Recorder) Rejected(pod *corev1.Pod, knob, result, reason string) {
 }
 
 // TierApplyResult is this package's fixed, bounded vocabulary for the
-// cpi_tier_apply_total counter's result label (HC-5), modeled on
+// cpu_tier_apply_total counter's result label (HC-5), modeled on
 // envgate.Reason. record normalizes any caller-supplied result string
 // outside this set to TierApplyResultOther before it reaches
 // WithLabelValues.
@@ -104,7 +104,7 @@ const (
 	TierApplyResultRejected TierApplyResult = "rejected"
 	// TierApplyResultOther is the fallback for any result value outside
 	// this vocabulary, so an unexpected caller string collapses into one
-	// series instead of minting a new cpi_tier_apply_total series per
+	// series instead of minting a new cpu_tier_apply_total series per
 	// unique input.
 	TierApplyResultOther TierApplyResult = "other"
 )
@@ -121,7 +121,7 @@ func normalizeTierApplyResult(result string) TierApplyResult {
 }
 
 // TierApplyReason is this package's fixed, bounded vocabulary for the
-// cpi_tier_apply_total counter's reason label (HC-5), modeled on
+// cpu_tier_apply_total counter's reason label (HC-5), modeled on
 // envgate.Reason. Its members are the actually-possible non-error and
 // sentinel-error causes a tier-apply attempt can report — drawn from this
 // operator's own contracts (the Event reasons in events.go, the cgroup
@@ -184,7 +184,7 @@ func normalizeTierApplyReason(reason string) TierApplyReason {
 	}
 }
 
-// record is the single place that increments cpi_tier_apply_total and
+// record is the single place that increments cpu_tier_apply_total and
 // fires an Event: every exported Recorder method funnels through it, so
 // there is no code path that does one without the other. The Event message
 // carries result and reason as passed, but the counter's result/reason

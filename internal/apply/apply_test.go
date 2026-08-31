@@ -16,9 +16,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
 )
 
 // fakeWriteCall is one recorded Writer.WriteKnob invocation, in the exact
@@ -301,7 +301,7 @@ func TestVC5EveryWriteLeavesTrace(t *testing.T) {
 	}
 	var counterIncrements float64
 	for _, family := range families {
-		if family.GetName() != "cpi_tier_apply_total" {
+		if family.GetName() != "cpu_tier_apply_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
@@ -309,7 +309,7 @@ func TestVC5EveryWriteLeavesTrace(t *testing.T) {
 		}
 	}
 	if counterIncrements != float64(writesExecuted) {
-		t.Errorf("cpi_tier_apply_total total increments = %v, want %d", counterIncrements, writesExecuted)
+		t.Errorf("cpu_tier_apply_total total increments = %v, want %d", counterIncrements, writesExecuted)
 	}
 }
 
@@ -357,7 +357,7 @@ func TestApplyEINVALIsRejectedNotRetried(t *testing.T) {
 	}
 	var found bool
 	for _, family := range families {
-		if family.GetName() != "cpi_tier_apply_total" {
+		if family.GetName() != "cpu_tier_apply_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
@@ -371,7 +371,7 @@ func TestApplyEINVALIsRejectedNotRetried(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("cpi_tier_apply_total has no series with result=rejected reason=einval; families = %+v", families)
+		t.Errorf("cpu_tier_apply_total has no series with result=rejected reason=einval; families = %+v", families)
 	}
 }
 

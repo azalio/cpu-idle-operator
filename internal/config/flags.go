@@ -1,4 +1,4 @@
-// Package config parses the cpi-idle-operator agent's command-line flags
+// Package config parses the cpu-idle-operator agent's command-line flags
 // into a validated Config value.
 package config
 
@@ -76,7 +76,7 @@ type Config struct {
 // empty, since watching every node in the cluster is never an acceptable
 // silent fallback.
 func ParseFlags(argv []string) (Config, error) {
-	fs := flag.NewFlagSet("cpi-idle-agent", flag.ContinueOnError)
+	fs := flag.NewFlagSet("cpu-idle-agent", flag.ContinueOnError)
 
 	cgroupRoot := fs.String("cgroup-root", defaultCgroupRoot, "filesystem root under which pod cgroups are located")
 	kubepodsName := fs.String("kubepods-name", defaultKubepodsName, "top-level kubepods cgroup slice/directory name kubelet uses under --cgroup-root (non-default on e.g. kind: see README)")

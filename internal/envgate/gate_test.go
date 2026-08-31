@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 // --- fixture helpers ---------------------------------------------------

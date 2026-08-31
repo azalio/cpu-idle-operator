@@ -1,4 +1,4 @@
-# Sample pod that requests only the burst tier: cpi-idle-agent sets
+# Sample pod that requests only the burst tier: cpu-idle-agent sets
 # cpu.max.burst to the pod's CPU quota. Burst only takes effect when every
 # container declares a positive limits.cpu (internal/tier.hasPositiveCPULimit),
 # so this sample sets one.
@@ -8,7 +8,7 @@ metadata:
   name: sample-burst
   namespace: default
   labels:
-    app.kubernetes.io/name: cpi-idle-sample
+    app.kubernetes.io/name: cpu-idle-sample
   annotations:
     cpu.azalio.net/burst: "true"
 spec:

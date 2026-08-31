@@ -28,7 +28,7 @@ import (
 // this particular enqueue came from the informer's periodic full resync
 // replaying an unchanged pod rather than an observed Add/Update/Delete
 // event. Reconciler needs the distinction solely to attribute a drift it
-// catches to cpi_resync_drift_total (resolution T-011): resync is
+// catches to cpu_resync_drift_total (resolution T-011): resync is
 // insurance against an unknown writer, and the metric exists to say "we
 // found one" without drowning in ordinary apply/revert outcomes.
 type reconcileRequest struct {

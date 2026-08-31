@@ -1,6 +1,6 @@
 # Sample pod that requests both tiers at once: idle plus burst. Both
 # annotations are independent (internal/tier.Desired evaluates them
-# separately), so cpi-idle-agent applies cpu.idle=1 and configures
+# separately), so cpu-idle-agent applies cpu.idle=1 and configures
 # cpu.max.burst on the same pod cgroup.
 apiVersion: v1
 kind: Pod
@@ -8,7 +8,7 @@ metadata:
   name: sample-both
   namespace: default
   labels:
-    app.kubernetes.io/name: cpi-idle-sample
+    app.kubernetes.io/name: cpu-idle-sample
   annotations:
     cpu.azalio.net/tier: idle
     cpu.azalio.net/burst: "true"

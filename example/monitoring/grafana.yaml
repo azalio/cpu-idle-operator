@@ -67,9 +67,9 @@ data:
             ]
           },
           "targets": [
-            {"expr": "1000 * histogram_quantile(0.99, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "p99", "refId": "A"},
-            {"expr": "1000 * histogram_quantile(0.95, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "p95", "refId": "B"},
-            {"expr": "1000 * histogram_quantile(0.50, rate(k6_http_req_duration_seconds{name=\"work\"}[30s]))", "legendFormat": "median", "refId": "C"}
+            {"expr": "1000 * histogram_quantile(0.99, sum(rate(k6_http_req_duration_seconds{name=\"work\"}[30s])))", "legendFormat": "p99", "refId": "A"},
+            {"expr": "1000 * histogram_quantile(0.95, sum(rate(k6_http_req_duration_seconds{name=\"work\"}[30s])))", "legendFormat": "p95", "refId": "B"},
+            {"expr": "1000 * histogram_quantile(0.50, sum(rate(k6_http_req_duration_seconds{name=\"work\"}[30s])))", "legendFormat": "median", "refId": "C"}
           ]
         },
         {
@@ -89,8 +89,8 @@ data:
             ]
           },
           "targets": [
-            {"expr": "rate(k6_http_reqs_total[15s])", "legendFormat": "requests/s", "refId": "A"},
-            {"expr": "100 * k6_http_req_failed_rate{name=\"work\"}", "legendFormat": "errors, %", "refId": "B"}
+            {"expr": "sum(rate(k6_http_reqs_total[15s]))", "legendFormat": "requests/s", "refId": "A"},
+            {"expr": "100 * max(k6_http_req_failed_rate{name=\"work\"})", "legendFormat": "errors, %", "refId": "B"}
           ]
         },
         {

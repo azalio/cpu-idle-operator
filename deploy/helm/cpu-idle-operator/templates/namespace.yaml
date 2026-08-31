@@ -3,4 +3,4 @@ kind: Namespace
 metadata:
   name: {{ .Values.namespace }}
   labels:
-    app.kubernetes.io/name: cpi-idle-operator
+    app.kubernetes.io/name: cpu-idle-operator

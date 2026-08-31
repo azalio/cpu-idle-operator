@@ -19,12 +19,12 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/azalio/cpi-idle-operator/internal/agent"
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/config"
-	"github.com/azalio/cpi-idle-operator/internal/envgate"
+	"github.com/azalio/cpu-idle-operator/internal/agent"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/envgate"
 )
 
 // --- fixture helpers ---------------------------------------------------
@@ -204,7 +204,7 @@ func (j *journalingApplier) snapshot() []string {
 
 // TestVC1V1NodeStaysNotReady covers VC1 [AC-6]: on a cgroup v1 fixture, the
 // process stays alive (never exits, never restarts), readiness reports 503
-// with the gate's reason text, cpi_environment_gate_info carries that same
+// with the gate's reason text, cpu_environment_gate_info carries that same
 // reason, and the one annotated pod on this node gets exactly one
 // EnvironmentUnsupported Event.
 func TestVC1V1NodeStaysNotReady(t *testing.T) {
@@ -249,7 +249,7 @@ func TestVC1V1NodeStaysNotReady(t *testing.T) {
 		}
 
 		metricsURL := "http://" + metricsListener.Addr().String() + "/metrics"
-		waitForMetric(t, metricsURL, `cpi_environment_gate_info{node="node-a",reason="cgroup_v1"} 1`, 5*time.Second)
+		waitForMetric(t, metricsURL, `cpu_environment_gate_info{node="node-a",reason="cgroup_v1"} 1`, 5*time.Second)
 
 		event := readEvent(t, fakeRecorder, 5*time.Second)
 		if !strings.Contains(event, "EnvironmentUnsupported") {

@@ -1,5 +1,5 @@
 // Package annotations is the single source of truth for the pod annotation
-// keys that cpi-idle-operator reacts to. No other package in this tree may
+// keys that cpu-idle-operator reacts to. No other package in this tree may
 // spell out the "cpu.azalio.net/" literal directly.
 package annotations
 

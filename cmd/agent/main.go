@@ -1,4 +1,4 @@
-// Command agent is the cpi-idle-operator node agent entry point. Startup
+// Command agent is the cpu-idle-operator node agent entry point. Startup
 // order is fixed: parse flags, run the environment gate check, then start
 // the metrics and health HTTP servers — everything past flag parsing lives
 // in internal/agent.Lifecycle, which this file only wires together and
@@ -25,8 +25,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/azalio/cpi-idle-operator/internal/agent"
-	"github.com/azalio/cpi-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/agent"
+	"github.com/azalio/cpu-idle-operator/internal/config"
 )
 
 func main() {
@@ -37,19 +37,19 @@ func main() {
 
 	cfg, err := config.ParseFlags(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cpi-idle-agent: %v\n", err)
+		fmt.Fprintf(os.Stderr, "cpu-idle-agent: %v\n", err)
 		os.Exit(1)
 	}
 
 	client, err := newKubeClient()
 	if err != nil {
-		logger.Error("cpi-idle-agent: build kubernetes client", "error", err)
+		logger.Error("cpu-idle-agent: build kubernetes client", "error", err)
 		os.Exit(1)
 	}
 
 	if cfg.RevertAll {
 		if err := agent.RunRevertAll(ctx, cfg, agent.RevertAllOptions{Client: client, Logger: logger}); err != nil {
-			logger.Error("cpi-idle-agent: revert-all failed", "error", err)
+			logger.Error("cpu-idle-agent: revert-all failed", "error", err)
 			os.Exit(1)
 		}
 		return
@@ -61,7 +61,7 @@ func main() {
 		Logger: logger,
 	}
 	if err := lc.Run(ctx); err != nil {
-		logger.Error("cpi-idle-agent: exited with error", "error", err)
+		logger.Error("cpu-idle-agent: exited with error", "error", err)
 		os.Exit(1)
 	}
 }

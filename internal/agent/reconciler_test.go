@@ -26,11 +26,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
 // fakeApplier implements Applier, recording call counts instead of
@@ -255,7 +255,7 @@ func TestVC2LivePodAnnotationAddAndRemove(t *testing.T) {
 // over a pod whose cgroup already matches its desired state must produce
 // zero Applier calls, zero Events (implied by zero Applier calls, since
 // every Event this package can raise flows through Applier), zero
-// Info-level log lines, and leave cpi_resync_drift_total at 0 -- even when
+// Info-level log lines, and leave cpu_resync_drift_total at 0 -- even when
 // the pass is attributed to resync.
 func TestVC3ReconcileIsIdempotent(t *testing.T) {
 	t.Run("test_vc3_reconcile_is_idempotent", func(t *testing.T) {
@@ -308,12 +308,12 @@ func TestVC3ReconcileIsIdempotent(t *testing.T) {
 			t.Fatalf("Gather() error = %v", err)
 		}
 		for _, family := range families {
-			if family.GetName() != "cpi_resync_drift_total" {
+			if family.GetName() != "cpu_resync_drift_total" {
 				continue
 			}
 			for _, metric := range family.GetMetric() {
 				if got := metric.GetCounter().GetValue(); got != 0 {
-					t.Errorf("cpi_resync_drift_total = %v, want 0", got)
+					t.Errorf("cpu_resync_drift_total = %v, want 0", got)
 				}
 			}
 		}
@@ -426,14 +426,14 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 	})
 }
 
-// podsInTierSamples extracts cpi_pods_in_tier's samples from a Gather()
+// podsInTierSamples extracts cpu_pods_in_tier's samples from a Gather()
 // snapshot, keyed by "namespace|qos_class|tier" (node is omitted: every
 // sample in these tests shares the same node label).
 func podsInTierSamples(t *testing.T, families []*dto.MetricFamily) map[string]float64 {
 	t.Helper()
 	samples := map[string]float64{}
 	for _, family := range families {
-		if family.GetName() != "cpi_pods_in_tier" {
+		if family.GetName() != "cpu_pods_in_tier" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
@@ -454,7 +454,7 @@ func podsInTierSamples(t *testing.T, families []*dto.MetricFamily) map[string]fl
 	return samples
 }
 
-// TestPodsInTierReflectsFullNodeState covers the fix for cpi_pods_in_tier
+// TestPodsInTierReflectsFullNodeState covers the fix for cpu_pods_in_tier
 // (previously registered but never written in production): the gauge is
 // recomputed from a full listing of the informer cache on every Reconcile
 // call, not incremented per pod, so it cannot drift from reality and does
@@ -505,7 +505,7 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 	got := podsInTierSamples(t, families)
 	want := map[string]float64{"prod|Burstable|idle": 1, "prod|Burstable|burst": 1}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cpi_pods_in_tier samples = %v, want %v", got, want)
+		t.Fatalf("cpu_pods_in_tier samples = %v, want %v", got, want)
 	}
 
 	// Removing a pod from the cache and reconciling again must shrink the
@@ -525,7 +525,7 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 	got = podsInTierSamples(t, families)
 	want = map[string]float64{"prod|Burstable|burst": 1}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cpi_pods_in_tier samples after delete = %v, want %v", got, want)
+		t.Fatalf("cpu_pods_in_tier samples after delete = %v, want %v", got, want)
 	}
 }
 
@@ -662,7 +662,7 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 	got := podsInTierSamples(t, families)
 	want := map[string]float64{"prod|Burstable|idle": 2}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cpi_pods_in_tier samples = %v, want %v", got, want)
+		t.Fatalf("cpu_pods_in_tier samples = %v, want %v", got, want)
 	}
 
 	if err := indexer.Delete(podB); err != nil {
@@ -678,7 +678,7 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 	got = podsInTierSamples(t, families)
 	want = map[string]float64{"prod|Burstable|idle": 1}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cpi_pods_in_tier samples after one pod left = %v, want %v -- a departed pod must shrink the shared-label gauge, not leave a stale count", got, want)
+		t.Fatalf("cpu_pods_in_tier samples after one pod left = %v, want %v -- a departed pod must shrink the shared-label gauge, not leave a stale count", got, want)
 	}
 }
 
@@ -786,7 +786,7 @@ pollLoop:
 	}
 }
 
-// tierApplyReasonTotal sums cpi_tier_apply_total's counter value across
+// tierApplyReasonTotal sums cpu_tier_apply_total's counter value across
 // every series carrying label reason=wantReason, regardless of its other
 // labels (node/namespace/qos_class/result do not vary within one test's
 // single pod).
@@ -794,7 +794,7 @@ func tierApplyReasonTotal(t *testing.T, families []*dto.MetricFamily, wantReason
 	t.Helper()
 	var total float64
 	for _, family := range families {
-		if family.GetName() != "cpi_tier_apply_total" {
+		if family.GetName() != "cpu_tier_apply_total" {
 			continue
 		}
 		for _, metric := range family.GetMetric() {
@@ -831,9 +831,9 @@ func drainEvents(events <-chan string) int {
 // deployment surfaced: a pod carrying a tier.Note (AC-4's burst-without-
 // limits.cpu case here) that Reconcile's own plan has nothing to write for
 // used to route through Applier.Apply -- and so re-fire its Event and
-// increment cpi_tier_apply_total -- on every single reconcile pass,
+// increment cpu_tier_apply_total -- on every single reconcile pass,
 // including every ~60s resync, even though nothing about the pod ever
-// changed (measured on a stand as cpi_tier_apply_total{reason=
+// changed (measured on a stand as cpu_tier_apply_total{reason=
 // "limits_cpu_missing",result="inactive"} climbing 7->8 in one resync
 // interval with a growing TierInactive Event count on kubectl get events).
 // The fix tracks each pod's last-reported Note set in the Reconciler
@@ -903,7 +903,7 @@ func TestPodNoteDeduplication(t *testing.T) {
 			t.Fatalf("Gather() error = %v", err)
 		}
 		if got := tierApplyReasonTotal(t, families, string(observe.TierApplyReasonLimitsCPUMissing)); got != 1 {
-			t.Fatalf(`cpi_tier_apply_total{reason=%q} = %v, want 1: an unchanged Note must not increment the counter on every resync pass`, observe.TierApplyReasonLimitsCPUMissing, got)
+			t.Fatalf(`cpu_tier_apply_total{reason=%q} = %v, want 1: an unchanged Note must not increment the counter on every resync pass`, observe.TierApplyReasonLimitsCPUMissing, got)
 		}
 	})
 

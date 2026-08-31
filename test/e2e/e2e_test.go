@@ -13,9 +13,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/azalio/cpi-idle-operator/internal/annotations"
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
 // TestKindApplyAndRevert deploys config/base's real DaemonSet into kind and
@@ -28,7 +28,7 @@ import (
 // kindCgroupRoot/kindKubepodsName doc comment and
 // TestPreflightKindCgroupViewConsistency). config/base/daemonset.yaml
 // itself never carries either override: production clusters keep the
-// plain defaults (README's Supported Environments section).
+// plain defaults (README's Requirements section).
 //
 // TestPreflightKindCgroupViewConsistency is this test's own precondition:
 // it already proves, with a throwaway probe pod, that the agent's computed
@@ -51,7 +51,7 @@ func TestKindApplyAndRevert(t *testing.T) {
 	agentPod := waitForAgentPodRunning(t, ctx, clientset, podReadyTimeout)
 	t.Logf("agent DaemonSet pod %s/%s is Running", agentPod.Namespace, agentPod.Name)
 
-	ns := createTempNamespace(t, ctx, clientset, "cpi-e2e")
+	ns := createTempNamespace(t, ctx, clientset, "cpu-e2e")
 	defer deleteNamespace(t, clientset, ns)
 
 	idlePod := applyProbePod(t, ctx, clientset, ns, "idle-probe", "500m", map[string]string{

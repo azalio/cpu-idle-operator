@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 // minKernelMajor and minKernelMinor are the lowest kernel version this

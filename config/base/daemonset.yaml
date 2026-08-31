@@ -8,28 +8,28 @@
 # writable hostPath onto /sys/fs/cgroup is de facto the ability to change
 # the cgroup of any pod on the node. It is unavoidable for a node agent
 # that writes per-pod cgroup files, but it must never be described as a
-# low-privilege container. See README's Security Boundaries section for
-# the same wording applied to the cluster-wide picture.
+# low-privilege container. README's Requirements section calls out the
+# root user and read-write cgroup mount explicitly.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: cpi-idle-agent
-  namespace: cpi-idle-system
+  name: cpu-idle-agent
+  namespace: cpu-idle-system
   labels:
-    app.kubernetes.io/name: cpi-idle-operator
+    app.kubernetes.io/name: cpu-idle-operator
     app.kubernetes.io/component: agent
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: cpi-idle-operator
+      app.kubernetes.io/name: cpu-idle-operator
       app.kubernetes.io/component: agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: cpi-idle-operator
+        app.kubernetes.io/name: cpu-idle-operator
         app.kubernetes.io/component: agent
     spec:
-      serviceAccountName: cpi-idle-agent
+      serviceAccountName: cpu-idle-agent
       # Not a network/PID/IPC-namespace-sharing DaemonSet: the agent only
       # needs filesystem access to /sys/fs/cgroup and the Kubernetes API,
       # neither of which requires host namespaces.

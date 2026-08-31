@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 // cpuMaxUnbounded is cpu.max's first field when no quota is configured.

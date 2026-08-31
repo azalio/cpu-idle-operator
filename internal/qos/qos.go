@@ -13,7 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 // Class is a Kubernetes pod QoS class, computed purely from spec.

@@ -1,4 +1,4 @@
-module github.com/azalio/cpi-idle-operator
+module github.com/azalio/cpu-idle-operator
 
 go 1.26.0
 

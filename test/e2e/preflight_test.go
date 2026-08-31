@@ -5,7 +5,7 @@ package e2e
 import (
 	"testing"
 
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
 
 // TestPreflightKindCgroupViewConsistency is the mandatory first e2e check
@@ -39,7 +39,7 @@ import (
 // production's own defaults cannot be made to match kind's kubelet layout,
 // full stop. It is closed not by changing config/base (which must keep
 // shipping the defaults that are correct for a real production kubelet —
-// see README's Supported Environments section) but by making the top-level
+// see README's Requirements section) but by making the top-level
 // kubepods cgroup name configurable (--kubepods-name): pointed at
 // kindCgroupRoot with kindKubepodsName, the agent's own
 // cgroup.PodCgroupPath computes exactly the path measured above, with no
@@ -53,7 +53,7 @@ func TestPreflightKindCgroupViewConsistency(t *testing.T) {
 	requireNodeReachable(t)
 	ctx := t.Context()
 
-	ns := createTempNamespace(t, ctx, clientset, "cpi-preflight")
+	ns := createTempNamespace(t, ctx, clientset, "cpu-preflight")
 	defer deleteNamespace(t, clientset, ns)
 
 	pod := applyProbePod(t, ctx, clientset, ns, "preflight-probe", "500m", nil)

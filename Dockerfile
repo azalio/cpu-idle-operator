@@ -1,4 +1,4 @@
-# cpi-idle-agent is a single static binary that never shells out (it talks
+# cpu-idle-agent is a single static binary that never shells out (it talks
 # to the Kubernetes API and to cgroupfs directly), so the runtime image
 # needs no shell and no package manager — distroless "static" is enough.
 # The image keeps root as its default user on purpose: the DaemonSet's
@@ -22,10 +22,10 @@ ARG TARGETARCH=amd64
 # internal/cgroup only compiles under Linux (cgroup v2 syscalls), and a
 # static binary is what makes the distroless "static" base work at all.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/cpi-idle-agent ./cmd/agent
+    go build -trimpath -ldflags="-s -w" -o /out/cpu-idle-agent ./cmd/agent
 
 FROM gcr.io/distroless/static-debian12:latest
 
-COPY --from=builder /out/cpi-idle-agent /cpi-idle-agent
+COPY --from=builder /out/cpu-idle-agent /cpu-idle-agent
 
-ENTRYPOINT ["/cpi-idle-agent"]
+ENTRYPOINT ["/cpu-idle-agent"]

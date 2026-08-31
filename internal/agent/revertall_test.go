@@ -20,10 +20,10 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/config"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
 // revertAllTestPod builds a minimal single-container pod with a caller-

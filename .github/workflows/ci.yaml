@@ -86,7 +86,7 @@ jobs:
           # survivable, but pinning keeps the failure mode "someone edited the
           # chart" rather than "GitHub rolled a new Helm".
           version: v4.1.1
-      # config/base is generated from deploy/helm/cpi-idle-operator, not
+      # config/base is generated from deploy/helm/cpu-idle-operator, not
       # hand-maintained in parallel (see the "manifests" Makefile target).
       # This re-renders it and fails if the committed config/base doesn't
       # match: the two places would otherwise be free to drift apart
@@ -120,7 +120,7 @@ jobs:
         run: |
           fstype="$(stat -fc %T /sys/fs/cgroup 2>/dev/null || true)"
           if [ "${fstype}" != "cgroup2fs" ]; then
-            echo "::error::This runner's /sys/fs/cgroup is not cgroup v2 (detected type: '${fstype:-unknown}'). cpi-idle-operator requires cgroup v2 unified (HC-1): cpu.idle does not exist for cgroup v1. This is a runner/environment problem, not a code regression."
+            echo "::error::This runner's /sys/fs/cgroup is not cgroup v2 (detected type: '${fstype:-unknown}'). cpu-idle-operator requires cgroup v2 unified (HC-1): cpu.idle does not exist for cgroup v1. This is a runner/environment problem, not a code regression."
             exit 1
           fi
           echo "runner confirmed on cgroup v2 (${fstype})"
@@ -142,10 +142,10 @@ jobs:
           kind version
 
       - name: Create kind cluster
-        run: kind create cluster --name cpi-idle-e2e --config test/e2e/kind-config.yaml --wait 120s
+        run: kind create cluster --name cpu-idle-e2e --config test/e2e/kind-config.yaml --wait 120s
 
       - name: Load agent image into kind
-        run: kind load docker-image ghcr.io/azalio/cpu-idle-operator:latest --name cpi-idle-e2e
+        run: kind load docker-image ghcr.io/azalio/cpu-idle-operator:latest --name cpu-idle-e2e
 
       # Formerly Open Question 1 (.map/default/spec_default.md,
       # .map/wayfind/cpu-idle-operator/resolutions/T-012.md,
@@ -171,7 +171,7 @@ jobs:
 
       - name: Delete kind cluster
         if: always()
-        run: kind delete cluster --name cpi-idle-e2e
+        run: kind delete cluster --name cpu-idle-e2e
 
   ci:
     name: ci

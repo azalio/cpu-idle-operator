@@ -22,17 +22,17 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/config"
-	"github.com/azalio/cpi-idle-operator/internal/envgate"
-	"github.com/azalio/cpi-idle-operator/internal/guard"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
-	"github.com/azalio/cpi-idle-operator/internal/tier"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/envgate"
+	"github.com/azalio/cpu-idle-operator/internal/guard"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // componentName identifies this agent as the source of the Kubernetes
 // Events it raises (EventSource.Component).
-const componentName = "cpi-idle-agent"
+const componentName = "cpu-idle-agent"
 
 // shutdownTimeout bounds how long Run waits for the metrics and health
 // HTTP servers to finish in-flight requests once shutdown begins. It only

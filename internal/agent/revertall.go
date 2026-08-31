@@ -28,12 +28,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/config"
-	"github.com/azalio/cpi-idle-operator/internal/envgate"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/config"
+	"github.com/azalio/cpu-idle-operator/internal/envgate"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
 // RevertAllOptions carries RunRevertAll's dependencies. cmd/agent/main.go

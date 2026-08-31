@@ -13,6 +13,10 @@ bin/
 *.out
 coverage.txt
 
+# Python bytecode and interpreter caches
+__pycache__/
+*.py[cod]
+
 # map:session-telemetry — состояние текущей сессии MAP, меняется на каждом ходу.
 # Артефакты планирования (спека, блюпринт, ревью, wayfind-карты) остаются в git.
 .map/*/token_accounting.json

@@ -3,7 +3,7 @@ package apply
 import (
 	"strconv"
 
-	"github.com/azalio/cpi-idle-operator/internal/tier"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // Knob file names this package writes. They are exported so callers and

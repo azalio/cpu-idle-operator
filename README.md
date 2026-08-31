@@ -1,300 +1,75 @@
-# cpi-idle-operator
+# cpu-idle-operator
 
-A single-binary node agent for Kubernetes that gives pods opt-in access to
-two cgroup v2 CPU tiers — `cpu.idle` and `cpu.max.burst` — through pod
-annotations. No CRD, no admission webhook, no control-plane component: one
-DaemonSet per node, watching only the pods scheduled to it.
+`cpu-idle-operator` is a Kubernetes node agent that exposes two cgroup v2
+CPU controls through pod annotations: `cpu.idle` and `cpu.max.burst`.
+It runs as a DaemonSet and requires no CRDs, admission webhook, or
+control-plane component.
 
-Built as the reference implementation for a KubeCon talk about `cpu.idle`
-and what cgroup v2's extended CPU knobs actually do (and don't do) for you.
+## Requirements
 
-## The two tiers: Maximum, Yield, Progress
+- Linux with unified cgroup v2 and kernel 5.15 or newer.
+- The `systemd` cgroup driver is supported; `cgroupfs` support is experimental.
+- The default Helm values assume a stock kubelet cgroup layout. Override
+  `cgroupRoot` and `kubepodsName` for a non-default kubelet
+  `--cgroup-root`.
+- The agent runs as root and mounts `/sys/fs/cgroup` read-write so it can
+  update pod cgroups.
 
-Read this section before the rest of the document, or the two tiers below
-will look like they contradict each other: one is for pods with no CPU
-limit, the other only does anything for pods that *have* a limit.
+## Install with Helm
 
-Every pod's relationship to the CPU scheduler can be described along three
-independent axes:
+From a repository checkout:
 
-- **Maximum** — the upper bound on CPU the pod is allowed to consume. Set
-  by `limits.cpu`, enforced in the kernel by `cpu.max`.
-- **Yield** — whether the pod steps aside for other runnable, non-idle
-  work, or competes for the CPU on equal footing. Controlled by
-  `cpu.weight` and, at the extreme, `cpu.idle`.
-- **Progress** — the CPU time the pod's own workload actually gets to
-  make forward progress.
+```sh
+helm upgrade --install cpu-idle-operator ./deploy/helm/cpu-idle-operator
+kubectl -n cpu-idle-system rollout status daemonset/cpu-idle-agent
+```
 
-The two tiers this operator manages sit on different axes and never trade
-one pod's Progress for another's:
+The chart creates the `cpu-idle-system` namespace. See
+[`values.yaml`](deploy/helm/cpu-idle-operator/values.yaml) for image,
+resource, scheduling, cgroup path, metrics, and health endpoint settings.
 
-- `cpu.azalio.net/tier: idle` sets `cpu.idle=1`. It gives away Yield: the
-  pod steps aside whenever a non-idle neighbor is runnable, and only
-  reclaims the CPU when nothing else wants it. It never asks a neighbor
-  to give up Progress — it only ever cedes cycles, never takes them.
-- `cpu.azalio.net/burst` sets `cpu.max.burst` equal to the pod's own CPU
-  quota (`cpu.max`). It extends Maximum: the pod may spend, in a single
-  burst, quota it did not use in earlier periods — its own banked
-  allowance, not anyone else's. A pod with no `limits.cpu` has no quota to
-  bank in the first place, so burst has nothing to act on (see
-  [Annotations reference](#annotations-reference)).
+To uninstall:
 
-Neither tier increases one pod's Progress at a neighbor's expense. `idle`
-gives Progress away; `burst` only ever spends a pod's own previously-idle
-quota. A pod can carry both annotations at once — they are independent and
-apply on the same pod cgroup without conflict (measured; see
-[Verifying the core facts yourself](#verifying-the-core-facts-yourself)).
+```sh
+helm uninstall cpu-idle-operator
+```
 
-## Annotations reference
+## Pod annotations
 
 | Annotation | Value | Effect |
 |---|---|---|
-| `cpu.azalio.net/tier` | `idle` | Sets `cpu.idle=1` on the pod cgroup. Any other non-empty value is treated as an unrecognized tier (reserved for future use): no-op plus a Kubernetes Event, not an error. |
-| `cpu.azalio.net/burst` | any value, e.g. `"true"` | Sets `cpu.max.burst` to the pod's own `cpu.max` quota. The value itself is never parsed — presence of the key is what matters. Requires every container in the pod (including init containers) to declare a positive `limits.cpu`; otherwise the pod cgroup has no quota to burst against, and the agent emits an Event saying so instead of applying anything. |
+| `cpu.azalio.net/tier` | `idle` | Sets `cpu.idle=1` on the pod cgroup. The pod yields CPU whenever non-idle work is runnable. Other non-empty values are ignored and produce a Kubernetes Event. |
+| `cpu.azalio.net/burst` | any value | Sets `cpu.max.burst` to the pod's own `cpu.max` quota. Only key presence matters. Every regular and init container must declare a positive `limits.cpu`; otherwise the annotation has no effect and produces a Kubernetes Event. |
 
-Both keys live in exactly one place in the source tree —
-[`internal/annotations/keys.go`](internal/annotations/keys.go) — and
-[`hack/check-readme-keys.sh`](hack/check-readme-keys.sh) fails CI if this
-table drifts from that file.
+The annotations are independent and may be used together.
 
-A pod may carry both annotations; see
-[`config/samples/pod-both.yaml`](config/samples/pod-both.yaml) for a
-worked example, and `pod-idle.yaml` / `pod-burst.yaml` for the single-tier
-cases.
+### Idle tier
 
-## Quick start
-
-```
-make build          # cross-compiles cmd/agent for linux/amd64
-make docker-build    # builds the DaemonSet image
-make deploy           # kustomize build config/base | kubectl apply -f -
+```yaml
+metadata:
+  annotations:
+    cpu.azalio.net/tier: idle
 ```
 
-`config/base` renders a namespace, a `ClusterRole` scoped to
-`get/list/watch` on pods and `create/patch` on events, and the DaemonSet
-itself. Apply one of the samples under `config/samples/` to see the agent
-react to an annotation.
+### CPU quota burst
 
-For a complete measured scenario — an HTTP service whose latency SLO is
-broken by an unlimited `stress-ng` neighbor and recovered by annotating
-that neighbor onto the idle tier, with a pass/fail gate at every step —
-see [`example/`](example/README.md).
-
-`config/base/daemonset.yaml` references `ghcr.io/azalio/cpu-idle-operator`.
-[`.github/workflows/publish.yaml`](.github/workflows/publish.yaml) publishes
-that image to GHCR on every merge to `main` (tags: `latest` and the commit
-sha) and on every `v*` tag (the matching semver tag) -- **but not before
-then**. Until this branch's first merge to `main`, `ghcr.io/azalio/cpu-idle-operator:latest`
-does not exist yet, and `make deploy` against a real cluster will pull it
-straight into `ImagePullBackOff`. To try the agent before that first
-publish, build and load the image into your own cluster instead of relying
-on the registry -- e.g. for `kind`: `make docker-build && kind load
-docker-image ghcr.io/azalio/cpu-idle-operator:latest --name <your-cluster>`,
-the same thing CI's own e2e job does (see
-[`.github/workflows/ci.yaml`](.github/workflows/ci.yaml)).
-
-`config/base` itself is generated from the Helm chart under
-[`deploy/helm/cpi-idle-operator`](deploy/helm/cpi-idle-operator), which is
-the source of truth for the manifests. Run `make manifests` after changing
-the chart and commit the regenerated `config/base` -- CI's
-`check-manifests-drift` job fails the build if the two are out of sync.
-
-## Supported environments
-
-| Environment | Status |
-|---|---|
-| cgroup v2 unified, kernel 5.15+, `systemd` cgroup driver | **Supported.** Stand-verified (see below) and exercised by unit tests. |
-| cgroup v2 unified, kernel 5.15+, `cgroupfs` cgroup driver | **Experimental.** Implemented, but not covered by e2e or a live stand run. The agent logs a warning once per environment check on this driver. |
-| cgroup v1 | **Not supported.** `cpu.idle` does not exist for cgroup v1 entities. The agent fails its startup environment gate with a stated reason and performs zero cgroup writes. |
-| cgroup v1/v2 hybrid | **Not supported**, same reason: the `cpu` controller stays on v1 in hybrid mode. |
-| Kernel older than 5.15 | **Not supported.** `cpu.idle` for cgroup entities landed upstream in 5.15. |
-
-On any unsupported node the agent stays alive, reports not-ready with the
-specific reason, and never touches a cgroup file — it does not crash-loop
-and it does not guess.
-
-### Non-default kubelet `--cgroup-root`
-
-`config/base/daemonset.yaml` ships `--cgroup-root=/sys/fs/cgroup` with the
-top-level kubepods cgroup left at its default name, `kubepods` — correct
-for a stock kubelet. Some clusters run kubelet with a non-default
-`--cgroup-root` of their own (for example, `kind`'s kubeadm config sets it
-to `/kubelet`), which nests the whole kubepods hierarchy one level deeper
-and prefixes every kubepods slice/directory name with that root's own
-basename (`kubelet-kubepods` on `kind`, measured directly on a kind node —
-see `test/e2e/preflight_test.go`).
-
-For a cluster shaped like that, pass both `--cgroup-root` (pointed at the
-kubelet root's own cgroup directory) and `--kubepods-name` (the prefixed
-kubepods name) so the agent's computed pod-cgroup path matches what that
-kubelet actually creates. On `kind`, that pairing is
-`--cgroup-root=/sys/fs/cgroup/kubelet.slice --kubepods-name=kubelet-kubepods`
-— exactly what `test/e2e`'s own suite configures the DaemonSet with to
-exercise the positive AC-10 scenario for real (see
-[Testing: what's actually gated, and what isn't](#testing-whats-actually-gated-and-what-isnt)
-below). Do not change `config/base/daemonset.yaml`'s own defaults for this:
-they are correct for a real production kubelet, and a `kind`-shaped
-override there would break every other cluster.
-
-## VPA and in-place resize: excluded, not merely discouraged
-
-**A pod carrying either tier is excluded from `VerticalPodAutoscaler`
-in-place resize.** This isn't caution — it's a measured kernel behavior:
-
-- Writing `cpu.weight` while `cpu.idle=1` returns `EINVAL` for any value.
-- Lowering the CPU quota (`cpu.max`) below the pod's configured
-  `cpu.max.burst` also returns `EINVAL`.
-
-In-place resize writes exactly those two things. Once a pod is running
-under either tier, a resize attempt from VPA — or from `kubectl` directly
-— will be rejected by the kernel with `EINVAL`. The agent detects and
-reports this conflict; it does not resolve it, retry around it, or revert
-the tier to let the resize through.
-
-## The node guard: when the node runs hot, the idle tier stops
-
-`cpu.idle` removes a neighbor from time-sharing arbitration, but not from
-everything else: the kernel's wakeup-placement heuristics compute their
-search depth from PELT utilization, which cannot tell idle-tier cycles
-from normal ones; SMT siblings still share physical cores; and past
-~70% non-idle utilization the service's own queueing amplifies every
-leftover microsecond of interference. Measured on a saturated node, an
-idle-tier stress-ng squeezed down to 0.2 cores still pushed the
-foreground's latency SLO gate (see [`example/`](example/README.md)) from
-passing to failing — while harvesting under 3% of the node. Past that
-point there is nothing worth harvesting, so the correct move is to stop
-the idle tier until the pressure passes.
-
-The agent ships that control loop, off by default. Enable it with
-`--guard-high` (a non-idle CPU utilization fraction):
-
-```
---guard-high=0.70    # suppress idle-tier pods above 70% non-idle load
---guard-low=0.60     # lift suppression below 60% (hysteresis band)
---guard-period=5s    # sampling interval
---guard-freeze=true  # suppress via cgroup.freeze (default; see below)
---guard-floor="10000 100000"   # cpu.max while suppressed (throttle mode)
+```yaml
+metadata:
+  annotations:
+    cpu.azalio.net/burst: "true"
+spec:
+  containers:
+    - name: workload
+      resources:
+        limits:
+          cpu: "1"
 ```
 
-Each tick the guard reads the node's `cpu.stat`, subtracts the idle-tier
-pods' own usage, and converges every *running, no-CPU-limit, idle-tier*
-pod's suppression knob to what the temperature calls for: frozen
-(`cgroup.freeze=1`) while hot, running again once cool — or, with
-`--guard-freeze=false`, throttled via `cpu.max` to the floor quota
-instead. Freeze is the default because throttling was measured
-insufficient at the edge: even a 1%-of-one-CPU quota wakes every stress
-worker once per period, and those bursts alone kept the foreground's
-tail an order of magnitude above its solo level, while a frozen pod
-costs exactly zero. The trade-off: liveness and readiness probes of a
-frozen pod fail (batch pods rarely carry them). Two consecutive
-samples are required per transition, so one noisy sample never flips the
-node. Pods that declare their own CPU limit are left alone — their
-`cpu.max` belongs to kubelet, and the stateless restore value would be
-wrong for them. Transitions are visible as `IdleSuppressed` /
-`IdleRestored` Events on the affected pods.
+Removing an annotation restores the corresponding cgroup setting.
 
-The loop is deliberately stateless: agent restarts, pods that appear
-while the node is hot, and cgroups that vanish mid-write all fall out of
-per-tick convergence instead of needing special cases.
-
-## Security Boundaries
-
-This DaemonSet mounts `/sys/fs/cgroup` read-write and runs as uid 0. That
-is, de facto, the ability to change the cgroup of *any* pod on the node,
-not just the one the agent is reasoning about — this has been measured
-directly, not assumed: a container with every Linux capability dropped
-and `privileged: false` still successfully wrote another pod's cgroup
-file through this mount. Calling that "minimal privileges" would be
-false, so this document doesn't.
-
-What keeps the blast radius bounded is not the container's privilege
-level — it has none worth mentioning — but everything the agent's own
-code chooses never to do:
-
-- It reads and writes exactly four cgroup files: `cpu.idle`, `cpu.weight`,
-  `cpu.max`, `cpu.max.burst`. Nothing else under `/sys/fs/cgroup` is ever
-  touched.
-- Its Kubernetes RBAC is `get/list/watch` on pods and `create/patch` on
-  events — nothing more — and its informer is scoped to its own node via
-  a field selector.
-- It never calls the CRI socket, never talks to containerd, and never
-  reads `/proc/<pid>/cgroup`; the pod-cgroup path is derived only from the
-  pod's UID and QoS class.
-- The container itself never sets `privileged: true` and never requests
-  `SYS_ADMIN`.
-- Setting a tier only affects the pod that carries the annotation. There
-  is no annotation, flag, or code path that lets one pod's owner take CPU
-  away from a neighbor.
-
-None of that changes the first paragraph. The compensating properties
-bound what the agent *chooses* to do; they do not change what the mount
-and the uid *allow* it to do.
-
-## Non-goals
-
-- No CRD, no control-plane controller, no admission webhook, and no gate
-  on which pod owners may set either annotation.
-- No support for cgroup v1 or hybrid mode.
-- No active remediation of the VPA / in-place-resize conflict above — it
-  is detected and reported, not fixed.
-- No numeric override of the burst amount through an annotation value;
-  the burst is always the pod's own quota.
-- No performance claims about `cpu.max.burst`'s effect on tail latency —
-  that effect has not been measured.
-- No claims that adopting either tier changes how many nodes a cluster
-  needs or what running it costs.
-- No published latency figure for how long a tier takes to apply after a
-  pod or annotation appears. That number has never been measured on this
-  project; the agent applies tiers on an event-driven watch with a
-  periodic resync as a safety net, and that's what's currently known.
-
-## Verifying the core facts yourself
-
-This repository doesn't ask you to take its claims on faith.
-[`hack/stand-probe.sh`](hack/stand-probe.sh) reproduces the load-bearing
-facts above with a single command, run directly on a cgroup v2 node with
-`sudo` and (optionally) `kubectl`:
-
-```
-sudo hack/stand-probe.sh --dry-run   # see the plan without touching anything
-sudo hack/stand-probe.sh              # create probe pods and run the checks
-```
-
-It prints a table of check / expected / observed and exits non-zero on
-any mismatch. Among what it reproduces: `cpu.idle=1` surviving a
-`kubelet` restart and a full reconciliation cycle, `cpu.weight` writes
-being rejected with `EINVAL` while `cpu.idle=1`, the weight reverting to
-the kernel default (not the request-derived value) when `cpu.idle` is
-cleared, and both tiers coexisting on one pod cgroup without conflict.
-
-## Testing: what's actually gated, and what isn't
-
-Unit tests and `go vet` gate every merge. So does an e2e suite against a
-real [`kind`](https://kind.sigs.k8s.io/) cluster with a real DaemonSet
-from `config/base`, and it does prove the agent applies and reverts a tier
-on `kind`, for real: `kind` sets kubelet's `cgroupRoot` to `/kubelet`, so
-pods land under `kubelet.slice/kubelet-kubepods…`, not the plain
-`kubepods.slice` this agent expects at its default `--cgroup-root`. That
-mismatch was an open question; it's closed — not by reasoning about it, but
-by measuring the exact divergent layout on a live node and making the
-top-level kubepods cgroup name configurable (`--kubepods-name`, see
-[Non-default kubelet `--cgroup-root`](#non-default-kubelet---cgroup-root)
-above) so the agent can be pointed at it.
-
-`test/e2e`'s suite deploys `config/base`'s unmodified manifests, then
-patches only the deployed DaemonSet's `--cgroup-root`/`--kubepods-name`
-arguments for this `kind`-only reason (`config/base/daemonset.yaml` itself
-never carries either override — its defaults stay correct for a real
-production kubelet). A dedicated pre-flight test
-(`TestPreflightKindCgroupViewConsistency`) proves, before anything else
-runs, that the agent's computed pod-cgroup path converges with the path
-`kind`'s kubelet actually creates; the main scenario
-(`TestKindApplyAndRevert`) then applies the idle tier through the live
-DaemonSet, reads `cpu.idle=1` back from the node's real cgroupfs, removes
-the annotation, and confirms both `cpu.idle=0` and the restored
-request-derived `cpu.weight`. Both are required, merge-blocking checks. The
-same positive path is also covered independently by `hack/stand-probe.sh`
-against a real node with a stock kubelet configuration.
+Complete manifests are available in
+[`config/samples/`](config/samples/). Annotation decisions and rejected
+cgroup writes are reported as Kubernetes Events on the affected pod.
 
 ## License
 

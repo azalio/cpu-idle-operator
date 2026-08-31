@@ -1,15 +1,15 @@
-// Package tier computes cpi-idle-operator's desired CPU-tier state for a
+// Package tier computes cpu-idle-operator's desired CPU-tier state for a
 // pod, purely from its spec and annotations (see desired.go). It never
 // reads or writes a cgroup; the caller is responsible for reconciling the
 // computed State against the pod's actual cgroup files.
 package tier
 
-import "github.com/azalio/cpi-idle-operator/internal/observe"
+import "github.com/azalio/cpu-idle-operator/internal/observe"
 
 // Note codes reuse observe.TierApplyReason rather than a parallel
 // vocabulary. The caller feeds a Note's Code straight into
 // observe.Recorder's reason argument (typically Recorder.Inactive), so the
-// cpi_tier_apply_total "reason" label and the reasons this package can
+// cpu_tier_apply_total "reason" label and the reasons this package can
 // report never drift apart: a second, differently-spelled enum here would
 // recreate the exact bounded-cardinality problem TierApplyReason exists to
 // prevent (HC-5). NoteUnknownTierValue and NoteNoCPULimit are the closed

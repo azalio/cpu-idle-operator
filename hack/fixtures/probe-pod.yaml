@@ -14,7 +14,7 @@ metadata:
   name: probe-idle
   namespace: __NAMESPACE__
   labels:
-    app.kubernetes.io/name: cpi-idle-operator-probe
+    app.kubernetes.io/name: cpu-idle-operator-probe
   annotations:
     cpu.azalio.net/tier: idle
 spec:
@@ -36,7 +36,7 @@ metadata:
   name: probe-burst
   namespace: __NAMESPACE__
   labels:
-    app.kubernetes.io/name: cpi-idle-operator-probe
+    app.kubernetes.io/name: cpu-idle-operator-probe
   annotations:
     cpu.azalio.net/tier: idle
     cpu.azalio.net/burst: "true"

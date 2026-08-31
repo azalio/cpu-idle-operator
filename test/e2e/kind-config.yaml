@@ -1,4 +1,4 @@
-# Single-node kind cluster for cpi-idle-operator's e2e suite (test/e2e).
+# Single-node kind cluster for cpu-idle-operator's e2e suite (test/e2e).
 #
 # One node only: a second (worker) node would not help here and would only
 # slow the cluster down. The property under test is whether *any* kind node

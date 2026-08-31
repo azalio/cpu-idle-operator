@@ -42,7 +42,7 @@ func (f *fakeEventRecorder) AnnotatedEventf(object runtime.Object, _ map[string]
 }
 
 // TestVC3MetricAndEventAreAtomic checks that Recorder.Applied's one call
-// produces exactly the pair CCR-1 requires: one cpi_tier_apply_total
+// produces exactly the pair CCR-1 requires: one cpu_tier_apply_total
 // increment and exactly one Event, raised against the same pod passed in —
 // never a metric increment with no Event, or an Event with no metric.
 func TestVC3MetricAndEventAreAtomic(t *testing.T) {
@@ -77,20 +77,20 @@ func TestVC3MetricAndEventAreAtomic(t *testing.T) {
 	}
 	var applyFamily *dto.MetricFamily
 	for _, family := range families {
-		if family.GetName() == "cpi_tier_apply_total" {
+		if family.GetName() == "cpu_tier_apply_total" {
 			applyFamily = family
 		}
 	}
 	if applyFamily == nil {
-		t.Fatalf("cpi_tier_apply_total family missing from Gather() output")
+		t.Fatalf("cpu_tier_apply_total family missing from Gather() output")
 	}
 	if got := len(applyFamily.GetMetric()); got != 1 {
-		t.Fatalf("cpi_tier_apply_total series count = %d, want exactly 1", got)
+		t.Fatalf("cpu_tier_apply_total series count = %d, want exactly 1", got)
 	}
 
 	metric := applyFamily.GetMetric()[0]
 	if got := metric.GetCounter().GetValue(); got != 1 {
-		t.Errorf("cpi_tier_apply_total value = %v, want 1", got)
+		t.Errorf("cpu_tier_apply_total value = %v, want 1", got)
 	}
 	wantLabels := map[string]string{
 		"node": "node-a", "namespace": "prod", "qos_class": "BestEffort", "result": "applied", "reason": "ok",
@@ -100,7 +100,7 @@ func TestVC3MetricAndEventAreAtomic(t *testing.T) {
 		gotLabels[labelPair.GetName()] = labelPair.GetValue()
 	}
 	if !reflect.DeepEqual(gotLabels, wantLabels) {
-		t.Errorf("cpi_tier_apply_total labels = %v, want %v", gotLabels, wantLabels)
+		t.Errorf("cpu_tier_apply_total labels = %v, want %v", gotLabels, wantLabels)
 	}
 }
 
@@ -108,7 +108,7 @@ func TestVC3MetricAndEventAreAtomic(t *testing.T) {
 // collapses any reason string outside this package's bounded vocabulary
 // (HC-5): two different, unrecognized reason values — as the kernel would
 // produce for distinct cgroup-write failures — must land on the same
-// cpi_tier_apply_total series with reason="other" instead of minting a new
+// cpu_tier_apply_total series with reason="other" instead of minting a new
 // series per unique error text.
 func TestRecorderNormalizesUnrecognizedReasonToOther(t *testing.T) {
 	registry := prometheus.NewRegistry()
@@ -128,20 +128,20 @@ func TestRecorderNormalizesUnrecognizedReasonToOther(t *testing.T) {
 	}
 	var applyFamily *dto.MetricFamily
 	for _, family := range families {
-		if family.GetName() == "cpi_tier_apply_total" {
+		if family.GetName() == "cpu_tier_apply_total" {
 			applyFamily = family
 		}
 	}
 	if applyFamily == nil {
-		t.Fatalf("cpi_tier_apply_total family missing from Gather() output")
+		t.Fatalf("cpu_tier_apply_total family missing from Gather() output")
 	}
 	if got := len(applyFamily.GetMetric()); got != 1 {
-		t.Fatalf("cpi_tier_apply_total series count = %d, want exactly 1 (two distinct kernel error texts must collapse into one \"other\" series)", got)
+		t.Fatalf("cpu_tier_apply_total series count = %d, want exactly 1 (two distinct kernel error texts must collapse into one \"other\" series)", got)
 	}
 
 	metric := applyFamily.GetMetric()[0]
 	if got := metric.GetCounter().GetValue(); got != 2 {
-		t.Errorf("cpi_tier_apply_total value = %v, want 2", got)
+		t.Errorf("cpu_tier_apply_total value = %v, want 2", got)
 	}
 	gotLabels := map[string]string{}
 	for _, labelPair := range metric.GetLabel() {
@@ -225,11 +225,11 @@ func TestNewRecorderFromMetricsSharesOneRegistry(t *testing.T) {
 			t.Errorf("metric family %q appeared %d times in Gather() output, want exactly 1 (duplicate registration)", name, count)
 		}
 	}
-	if seen["cpi_pods_in_tier"] != 1 {
-		t.Errorf("Gather() output = %v, want cpi_pods_in_tier (Reconciler-side write) present exactly once", seen)
+	if seen["cpu_pods_in_tier"] != 1 {
+		t.Errorf("Gather() output = %v, want cpu_pods_in_tier (Reconciler-side write) present exactly once", seen)
 	}
-	if seen["cpi_tier_apply_total"] != 1 {
-		t.Errorf("Gather() output = %v, want cpi_tier_apply_total (Recorder-side write) present exactly once", seen)
+	if seen["cpu_tier_apply_total"] != 1 {
+		t.Errorf("Gather() output = %v, want cpu_tier_apply_total (Recorder-side write) present exactly once", seen)
 	}
 }
 

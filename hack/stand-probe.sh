@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# stand-probe.sh — проверка ядерных фактов, на которых стоит cpi-idle-operator.
+# stand-probe.sh — проверка ядерных фактов, на которых стоит cpu-idle-operator.
 #
 # Четыре факта невозможно воспроизвести без настоящего ядра и настоящего kubelet,
 # поэтому они не покрываются ни unit-тестами, ни kind e2e:
@@ -32,7 +32,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 readonly FIXTURE="${SCRIPT_DIR}/fixtures/probe-pod.yaml"
 
-NAMESPACE="cpi-idle-probe"
+NAMESPACE="cpu-idle-probe"
 NODE_NAME="$(hostname)"
 IDLE_POD_UID=""
 BURST_POD_UID=""
@@ -51,7 +51,7 @@ usage() {
 Использование: hack/stand-probe.sh [опции]
 
   --dry-run              напечатать план проверок и ожидаемые значения, ничего не создавая
-  --namespace NAME       namespace для подопытных подов (по умолчанию cpi-idle-probe)
+  --namespace NAME       namespace для подопытных подов (по умолчанию cpu-idle-probe)
   --node NAME            имя ноды для nodeName (по умолчанию hostname)
   --pod-uid UID          не создавать ничего: мерить уже существующий под без limits
   --burst-pod-uid UID    то же для пода с limits (комбинация обоих тиров)

@@ -1,12 +1,12 @@
-# Sample pod that requests only the idle tier: cpi-idle-agent sets
-# cpu.idle=1 on this pod's cgroup once cpi-idle-agent observes it.
+# Sample pod that requests only the idle tier: cpu-idle-agent sets
+# cpu.idle=1 on this pod's cgroup once cpu-idle-agent observes it.
 apiVersion: v1
 kind: Pod
 metadata:
   name: sample-idle
   namespace: default
   labels:
-    app.kubernetes.io/name: cpi-idle-sample
+    app.kubernetes.io/name: cpu-idle-sample
   annotations:
     cpu.azalio.net/tier: idle
 spec:

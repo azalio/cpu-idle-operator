@@ -13,11 +13,11 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/azalio/cpi-idle-operator/internal/apply"
-	"github.com/azalio/cpi-idle-operator/internal/cgroup"
-	"github.com/azalio/cpi-idle-operator/internal/observe"
-	"github.com/azalio/cpi-idle-operator/internal/qos"
-	"github.com/azalio/cpi-idle-operator/internal/tier"
+	"github.com/azalio/cpu-idle-operator/internal/apply"
+	"github.com/azalio/cpu-idle-operator/internal/cgroup"
+	"github.com/azalio/cpu-idle-operator/internal/observe"
+	"github.com/azalio/cpu-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // Applier is the subset of *apply.Applier Reconciler depends on: Apply
@@ -75,7 +75,7 @@ type Reconciler struct {
 	// whose underlying condition never changes (a burst request still
 	// missing a CPU limit, an annotation still carrying the same
 	// unrecognized value) would re-fire its Event and increment
-	// cpi_tier_apply_total on every ~60s resync forever, even though
+	// cpu_tier_apply_total on every ~60s resync forever, even though
 	// nothing about the pod changed between passes.
 	//
 	// Entries are deleted the moment a pod's notes go empty (podNoteChanged)
@@ -150,7 +150,7 @@ func NewReconciler(lister corelisters.PodLister, applier Applier, cgroupRoot, ku
 // full resync replaying an unchanged pod rather than an observed
 // Add/Update/Delete event (resolution T-011): a divergence caught this way
 // means some writer other than this agent touched the cgroup between
-// events, so it additionally increments cpi_resync_drift_total. Callers
+// events, so it additionally increments cpu_resync_drift_total. Callers
 // outside this package's own Informer.Run loop should pass false.
 //
 // A pod no longer present in the cache (apierrors.IsNotFound) is treated
@@ -174,7 +174,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	// rather than requiring every code path that could change a pod's
 	// tier membership to also remember to decrement the old bucket.
 	if err := r.refreshPodsInTier(); err != nil {
-		r.logger.Error("agent: failed to refresh cpi_pods_in_tier", "error", err)
+		r.logger.Error("agent: failed to refresh cpu_pods_in_tier", "error", err)
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
@@ -258,7 +258,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	// Intent: the fix for the repeated-Event defect -- a pod with nothing
 	// to write and a Note that has already been reported, unchanged, must
 	// stay silent too, or Apply's unconditional reportNotes would re-fire
-	// the same Event and cpi_tier_apply_total increment every resync pass
+	// the same Event and cpu_tier_apply_total increment every resync pass
 	// forever (observed on a live stand as an ever-growing TierInactive
 	// count for a pod whose state never changed). A pod with real cgroup
 	// work to do (len(plan) != 0) always proceeds to Apply/Revert below
@@ -343,7 +343,7 @@ func (r *Reconciler) podNoteChanged(key string, notes []tier.Note) bool {
 	return changed
 }
 
-// podsInTierKey identifies one cpi_pods_in_tier series: everything the
+// podsInTierKey identifies one cpu_pods_in_tier series: everything the
 // metric is labeled by except node, which is constant for this Reconciler
 // (every pod it ever lists lives on the same node, r.node).
 type podsInTierKey struct {

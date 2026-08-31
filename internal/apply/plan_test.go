@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/azalio/cpi-idle-operator/internal/tier"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // TestVC2ApplyOrderIsBurstThenIdle covers VC2 [AC-13]: a pod requesting
