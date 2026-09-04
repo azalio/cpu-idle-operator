@@ -14,8 +14,8 @@ type Reason string
 
 const (
 	// ReasonOK means every check passed: cgroup v2 unified, a recognized
-	// kubepods driver, and a kernel new enough for cpu.idle on cgroup
-	// entities.
+	// kubepods driver, a kernel new enough for cpu.idle on cgroup entities,
+	// and all required CPU control files present.
 	ReasonOK Reason = "ok"
 	// ReasonCgroupV1 means root is a cgroup v1 hierarchy: a "cpu"
 	// controller directory exists directly under root. cpu.idle does not
@@ -28,6 +28,10 @@ const (
 	// ReasonKernelTooOld means the running kernel predates 5.15, the
 	// version cpu.idle for cgroup entities landed upstream.
 	ReasonKernelTooOld Reason = "kernel_too_old"
+	// ReasonKernelUnknown means uname failed or returned a release string
+	// whose major/minor version could not be parsed. The agent cannot prove
+	// cpu.idle support, so it stays alive but fails the gate closed.
+	ReasonKernelUnknown Reason = "kernel_unknown"
 	// ReasonKubepodsMissing means root is a confirmed clean cgroup v2
 	// mount, but neither a systemd nor a cgroupfs kubepods directory
 	// exists yet. This is the expected state on a node kubelet has not
@@ -42,4 +46,7 @@ const (
 	// cgroupfs kubepods paths exist at once, which no real driver
 	// produces.
 	ReasonDriverUnknown Reason = "driver_unknown"
+	// ReasonRequiredKnobMissing means the kubepods cgroup exists but at
+	// least one control file the agent must read or write is unavailable.
+	ReasonRequiredKnobMissing Reason = "required_knob_missing"
 )

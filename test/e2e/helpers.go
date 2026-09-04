@@ -184,6 +184,23 @@ func readNodeFile(path string) (string, error) {
 	return nodeExec("cat", path)
 }
 
+// writeNodeFile writes value to one cgroup knob inside the kind node. It is
+// intentionally used only to create out-of-band drift: no Pod mutation is
+// involved, so a later repair proves the agent's periodic resync path rather
+// than its ordinary Add/Update event path.
+func writeNodeFile(path, value string) error {
+	full := []string{"exec", "-i", nodeContainerName(), "tee", path}
+	cmd := exec.Command(containerRuntime(), full...)
+	cmd.Stdin = strings.NewReader(value)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w: %s", containerRuntime(), strings.Join(full, " "), err, strings.TrimSpace(out.String()))
+	}
+	return nil
+}
+
 // findNodePath searches the node's cgroup tree for any path containing
 // needle, for diagnostics only — never for the pass/fail decision itself,
 // which always goes through the agent's own PodCgroupPath computation.
@@ -306,14 +323,6 @@ func isPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// isPodRunning reports whether pod's phase is Running — deliberately
-// weaker than isPodReady: this suite's DaemonSet pod is expected to stay
-// Running-but-not-Ready (AC-6) whenever the environment gate fails, and
-// waiting on Ready there would just time out.
-func isPodRunning(pod *corev1.Pod) bool {
-	return pod.Status.Phase == corev1.PodRunning
-}
-
 // waitForPod polls namespace/name until check returns true or timeout
 // elapses, failing t with the last observed pod on timeout.
 func waitForPod(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, namespace, name string, timeout time.Duration, check func(*corev1.Pod) bool) *corev1.Pod {
@@ -333,13 +342,10 @@ func waitForPod(t *testing.T, ctx context.Context, clientset *kubernetes.Clients
 	return last
 }
 
-// waitForAgentPodRunning polls until this node's cpu-idle-agent DaemonSet
-// pod exists and reaches phase Running. It deliberately does not wait for
-// Ready: whenever the environment gate fails (Open Question 1's measured
-// case on kind), Ready never happens by design (AC-6), so waiting for it
-// here would just time out instead of letting the test move on to assert
-// the fail-safe behavior that IS expected.
-func waitForAgentPodRunning(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, timeout time.Duration) *corev1.Pod {
+// waitForAgentPodReady returns the Ready pod from the completed DaemonSet
+// rollout. Waiting for phase Running alone can select the old pod between
+// the test's two DaemonSet patches and exercise stale cgroup flags.
+func waitForAgentPodReady(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, timeout time.Duration) *corev1.Pod {
 	t.Helper()
 	var last *corev1.Pod
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(pollCtx context.Context) (bool, error) {
@@ -347,13 +353,30 @@ func waitForAgentPodRunning(t *testing.T, ctx context.Context, clientset *kubern
 		if err != nil || len(pods.Items) == 0 {
 			return false, nil
 		}
-		last = &pods.Items[0]
-		return isPodRunning(last), nil
+		for i := range pods.Items {
+			last = &pods.Items[i]
+			if isPodReady(last) {
+				return true, nil
+			}
+		}
+		return false, nil
 	})
 	if err != nil {
-		t.Fatalf("wait for agent DaemonSet pod to reach Running: %v (last observed: %+v)", err, last)
+		t.Fatalf("wait for agent DaemonSet pod to become Ready: %v (last observed: %+v)", err, last)
 	}
 	return last
+}
+
+// waitForAgentRollout waits until the patched DaemonSet generation is fully
+// available. This prevents an old Running pod from satisfying the test while
+// Kubernetes is still replacing it with the kind-specific configuration.
+func waitForAgentRollout(t *testing.T) {
+	t.Helper()
+	runCmd(t, "kubectl", kubectlArgs(
+		"-n", agentNamespace,
+		"rollout", "status", "daemonset/"+agentDaemonSet,
+		"--timeout="+podReadyTimeout.String(),
+	)...)
 }
 
 // applyConfigBase applies config/base (namespace, RBAC, DaemonSet) with

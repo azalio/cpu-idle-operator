@@ -1,6 +1,7 @@
 package tier
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,22 @@ import (
 	"github.com/azalio/cpu-idle-operator/internal/observe"
 	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
+
+func TestUnknownTierNoteBoundsAnnotationValue(t *testing.T) {
+	// U+10FFFF is valid UTF-8 but not printable, so fmt's %q expands every
+	// rune to the longest \Uxxxxxxxx form used by this diagnostic.
+	value := strings.Repeat("\U0010FFFF", 1_000)
+	_, notes := Desired(podWithAnnotations(map[string]string{annotations.TierKey: value}, ""))
+	if len(notes) != 1 || notes[0].Code != NoteUnknownTierValue {
+		t.Fatalf("notes = %+v, want one unknown-value note", notes)
+	}
+	if got := len(notes[0].Message); got > 1024 {
+		t.Fatalf("note message has %d bytes, want at most the Kubernetes Event limit", got)
+	}
+	if !strings.Contains(notes[0].Message, "…") {
+		t.Fatalf("note message %q does not mark the truncated value", notes[0].Message)
+	}
+}
 
 // podWithAnnotations builds a minimal single-container pod carrying annos.
 // cpuLimit, when non-empty, sets the container's positive CPU limit; an
@@ -146,6 +163,21 @@ func TestVC1MixedContainersNoQuota(t *testing.T) {
 			t.Errorf("notes = %+v, want none", notes)
 		}
 	})
+}
+
+func TestPodLevelCPULimitActivatesBurst(t *testing.T) {
+	pod := podWithAnnotations(map[string]string{annotations.BurstKey: ""}, "")
+	pod.Spec.Resources = &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+	}
+
+	state, notes := Desired(pod)
+	if !state.BurstActive {
+		t.Fatal("BurstActive = false, want true for a positive pod-level CPU limit")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("notes = %+v, want none", notes)
+	}
 }
 
 // TestHasPositiveCPULimitInitContainers covers the init/sidecar half of the

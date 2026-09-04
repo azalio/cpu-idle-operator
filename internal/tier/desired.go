@@ -10,6 +10,10 @@ import (
 	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
+// Keep enough headroom below Kubernetes' 1024-byte Event note limit even
+// when fmt's %q expands every rune to a ten-byte \Uxxxxxxxx escape.
+const maxReportedAnnotationValueRunes = 64
+
 // State is the CPU-tier state Desired computes for a pod: which tiers the
 // pod's annotations request, and whether the burst request can actually
 // take effect given the pod's CPU limits. QoSClass and UID travel alongside
@@ -24,11 +28,10 @@ type State struct {
 	// (annotations.BurstKey) is present at all, regardless of its value:
 	// the value is never parsed (SC-2), so State carries no field for it.
 	BurstRequested bool
-	// BurstActive is true only when BurstRequested is true and every
-	// container in the pod — every regular container, native sidecar, and
-	// plain init container alike — has a positive CPU limit — the exact
-	// condition under which kubelet actually sets a cpu.max quota for the
-	// pod cgroup, per hasPositiveCPULimit's doc comment. Always false when
+	// BurstActive is true only when BurstRequested is true and the spec
+	// predicts a pod-cgroup CPU quota: either a positive pod-level CPU
+	// limit exists, or every regular/init container has one. The applier
+	// still verifies the live cpu.max before writing. Always false when
 	// BurstRequested is false.
 	BurstActive bool
 	// QoSClass is the pod's Kubernetes QoS class, computed via qos.ClassOf
@@ -73,7 +76,7 @@ func Desired(pod *corev1.Pod) (State, []Note) {
 			// no tier requested.
 			//
 			// That silence is a deliberate choice, not the same defect class as
-			// the cpu.max.burst bug fixed alongside it in hasPositiveCPULimit:
+			// a false-positive cpu.max quota prediction:
 			// that bug made Desired assert a request had taken effect
 			// (BurstActive=true) when kubelet would not actually apply it -- a
 			// false claim of success reported as if it were true. Here,
@@ -85,14 +88,14 @@ func Desired(pod *corev1.Pod) (State, []Note) {
 			// apply. Nothing false is asserted, so no note is warranted.
 			notes = append(notes, Note{
 				Code:    NoteUnknownTierValue,
-				Message: fmt.Sprintf("annotation %s carries unrecognized value %q; no tier requested", annotations.TierKey, tierValue),
+				Message: fmt.Sprintf("annotation %s carries unrecognized value %q; no tier requested", annotations.TierKey, reportedAnnotationValue(tierValue)),
 			})
 		}
 	}
 
 	if _, present := pod.Annotations[annotations.BurstKey]; present {
 		state.BurstRequested = true
-		if hasPositiveCPULimit(pod.Spec) {
+		if qos.HasCPUQuota(pod.Spec) {
 			state.BurstActive = true
 		} else {
 			// Intent: without a positive limits.cpu, kubelet leaves the pod
@@ -108,46 +111,10 @@ func Desired(pod *corev1.Pod) (State, []Note) {
 	return state, notes
 }
 
-// hasPositiveCPULimit reports whether every container in the pod — every
-// regular container, native sidecar, and plain init container alike —
-// declares a strictly positive CPU limit, mirroring kubelet's own
-// cpuLimitsDeclared check (k8s.io/kubernetes/pkg/kubelet/cm/helpers_linux.go,
-// ResourceConfigForPod): a single container missing limits.cpu disables the
-// pod cgroup's CPU quota entirely, so kubelet leaves cpu.max at "max"
-// (unbounded) instead of summing whatever partial limits exist — there is
-// then nothing for cpu.max.burst to act on. This applies uniformly to plain
-// (non-restartable) init containers too: the pod cgroup's cpu.max quota is
-// computed once, when the pod cgroup is created, and is never recomputed
-// after the init phase completes — a plain init container without a limit
-// blocks the quota exactly like a regular container without one would, even
-// though the init container itself has already exited by the time the
-// regular containers run.
-//
-// Measured on a live stand (kernel 6.17, k8s 1.36.3): a main container with
-// limits.cpu 200m plus a plain init container with no CPU limit produces
-// pod cgroup cpu.max "max 100000" — no quota — even though the main
-// container alone would otherwise qualify. (An earlier version of this
-// function assumed the missing-quota condition depended on steady-state
-// container coexistence and exempted plain init containers on that
-// reasoning; the stand measurement disproves that reasoning, so no
-// container class is exempted here.)
-func hasPositiveCPULimit(spec corev1.PodSpec) bool {
-	for _, container := range spec.Containers {
-		if !containerHasPositiveCPULimit(container) {
-			return false
-		}
+func reportedAnnotationValue(value string) string {
+	runes := []rune(value)
+	if len(runes) <= maxReportedAnnotationValueRunes {
+		return value
 	}
-	for _, container := range spec.InitContainers {
-		if !containerHasPositiveCPULimit(container) {
-			return false
-		}
-	}
-	return true
-}
-
-// containerHasPositiveCPULimit reports whether container declares a
-// strictly positive limits.cpu.
-func containerHasPositiveCPULimit(container corev1.Container) bool {
-	quantity, ok := container.Resources.Limits[corev1.ResourceCPU]
-	return ok && quantity.Sign() > 0
+	return string(runes[:maxReportedAnnotationValueRunes]) + "…"
 }

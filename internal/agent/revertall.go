@@ -4,7 +4,8 @@
 // cluster (resolution T-007). It intentionally does not reuse Lifecycle:
 // that type's whole job is the long-running informer/workqueue/HTTP-server
 // loop this mode must never start (INV-4's counterpart for revert-all is
-// "no watch, no listener, one List, then exit").
+// "no watch, no listener, one List, then exit"). The same List also backs
+// recovery of any durable node-guard marker before tier cleanup begins.
 package agent
 
 import (
@@ -24,6 +25,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,8 +35,10 @@ import (
 	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 	"github.com/azalio/cpu-idle-operator/internal/config"
 	"github.com/azalio/cpu-idle-operator/internal/envgate"
+	"github.com/azalio/cpu-idle-operator/internal/guard"
 	"github.com/azalio/cpu-idle-operator/internal/observe"
 	"github.com/azalio/cpu-idle-operator/internal/qos"
+	"github.com/azalio/cpu-idle-operator/internal/tier"
 )
 
 // RevertAllOptions carries RunRevertAll's dependencies. cmd/agent/main.go
@@ -78,8 +83,8 @@ type RevertAllOptions struct {
 // EINVAL/ErrCgroupGone handling wholesale, never duplicating it) for every
 // pod whose cgroup Snapshot shows an active tier right now. It prints a
 // result table (pod / tiers cleared / result) to opts.Out and starts no
-// HTTP server of any kind: this mode is meant to run as a standalone Job
-// immediately before the operator is removed from the cluster, not as
+// HTTP server of any kind: this mode is meant to run as an explicit exec
+// or standalone Job immediately before the operator is removed, not as
 // anything the long-running agent process ever reaches on its own.
 //
 // A pod's active tier is read from its live cgroup Snapshot, not its tier
@@ -123,14 +128,20 @@ func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions)
 		return fmt.Errorf("agent: revert-all: environment gate not ready: %s", gateResult.Reason)
 	}
 
-	applier := opts.Applier
-	if applier == nil {
-		applier = defaultRevertAllApplier(cfg, gateResult.Driver, opts)
-	}
-
 	pods, err := listNodePods(ctx, opts.Client, cfg.NodeName)
 	if err != nil {
 		return fmt.Errorf("agent: revert-all: list pods: %w", err)
+	}
+	eventRecorder, stopEventRecorder := revertAllEventRecorder(cfg, opts)
+	defer stopEventRecorder()
+	applier := opts.Applier
+	if applier == nil {
+		applier = defaultRevertAllApplier(cfg, gateResult.Driver, eventRecorder)
+	}
+
+	guardErr := recoverGuardState(ctx, cfg, gateResult.Driver, opts.Client, eventRecorder, logger, pods)
+	if guardErr != nil {
+		logger.Error("agent: revert-all: guard recovery failed", "error", guardErr)
 	}
 
 	results := make([]revertResult, 0, len(pods))
@@ -149,13 +160,17 @@ func RunRevertAll(ctx context.Context, cfg config.Config, opts RevertAllOptions)
 		logger.Error("agent: revert-all: failed to print result table", "error", tableErr)
 	}
 
+	var finalErrs []error
 	if failures > 0 {
-		return fmt.Errorf("agent: revert-all: %d of %d pods failed to revert", failures, len(pods))
+		finalErrs = append(finalErrs, fmt.Errorf("agent: revert-all: %d of %d pods failed to revert", failures, len(pods)))
+	}
+	if guardErr != nil {
+		finalErrs = append(finalErrs, fmt.Errorf("agent: revert-all: recover guard state: %w", guardErr))
 	}
 	if tableErr != nil {
-		return fmt.Errorf("agent: revert-all: %w", tableErr)
+		finalErrs = append(finalErrs, fmt.Errorf("agent: revert-all: %w", tableErr))
 	}
-	return nil
+	return errors.Join(finalErrs...)
 }
 
 // revertAllGateCheck returns opts.GateCheck, defaulting to envgate.Check.
@@ -181,16 +196,42 @@ func revertAllUname(opts RevertAllOptions) envgate.UnameFunc {
 // Lifecycle's own ready-branch construction (lifecycle.go's Run) so a
 // reverted pod is reported through the exact same Recorder/EventRecorder
 // pairing CCR-1 requires everywhere else in this operator.
-func defaultRevertAllApplier(cfg config.Config, driver cgroup.Driver, opts RevertAllOptions) Applier {
+func defaultRevertAllApplier(cfg config.Config, driver cgroup.Driver, eventRecorder record.EventRecorder) Applier {
+	registry := prometheus.NewRegistry()
+	recorder := observe.NewRecorder(registry, eventRecorder, cfg.NodeName)
+	return apply.NewApplier(cfg.CgroupRoot, cfg.KubepodsName, driver, recorder, observe.NewEventRecorder(eventRecorder))
+}
+
+func revertAllEventRecorder(cfg config.Config, opts RevertAllOptions) (record.EventRecorder, func()) {
 	eventRecorder := opts.EventRecorder
 	if eventRecorder == nil {
 		broadcaster := record.NewBroadcaster()
 		broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: opts.Client.CoreV1().Events("")})
 		eventRecorder = broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: componentName, Host: cfg.NodeName})
+		return eventRecorder, broadcaster.Shutdown
 	}
-	registry := prometheus.NewRegistry()
-	recorder := observe.NewRecorder(registry, eventRecorder, cfg.NodeName)
-	return apply.NewApplier(cfg.CgroupRoot, cfg.KubepodsName, driver, recorder, observe.NewEventRecorder(eventRecorder))
+	return eventRecorder, func() {}
+}
+
+func recoverGuardState(ctx context.Context, cfg config.Config, driver cgroup.Driver, client kubernetes.Interface, eventRecorder record.EventRecorder, logger *slog.Logger, pods []corev1.Pod) error {
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for i := range pods {
+		if err := indexer.Add(&pods[i]); err != nil {
+			return fmt.Errorf("build guard recovery cache: %w", err)
+		}
+	}
+	recorder := observe.NewRecorder(prometheus.NewRegistry(), eventRecorder, cfg.NodeName)
+	nodeGuard := guard.New(guard.Config{
+		High:         cfg.GuardHigh,
+		Low:          cfg.GuardLow,
+		Period:       cfg.GuardPeriod,
+		FloorQuota:   cfg.GuardFloor,
+		CgroupRoot:   cfg.CgroupRoot,
+		KubepodsName: cfg.KubepodsName,
+		Driver:       driver,
+		NodeName:     cfg.NodeName,
+	}, client, corelisters.NewPodLister(indexer), recorder, logger)
+	return nodeGuard.Recover(ctx)
 }
 
 // listNodePods lists nodeName's pods with a single call, scoped
@@ -260,8 +301,12 @@ func revertPod(ctx context.Context, applier Applier, cgroupRoot, kubepodsName st
 		return result
 	}
 
+	plan := apply.BuildPlan(tier.State{}, snapshot, qos.RestoreWeight(pod.Spec))
 	result.cleared = describeActiveTiers(snapshot)
-	if result.cleared == "none" {
+	if result.cleared == "none" && planContainsKnob(plan, apply.KnobCPUWeight) {
+		result.cleared = "weight"
+	}
+	if len(plan) == 0 {
 		result.status = "none"
 		return result
 	}
@@ -280,8 +325,47 @@ func revertPod(ctx context.Context, applier Applier, cgroupRoot, kubepodsName st
 		return result
 	}
 
+	// Applier deliberately records a kernel EINVAL on a tier knob without
+	// returning an error to the long-running reconciler: fighting the same
+	// file immediately cannot succeed, and a later event/resync retries from
+	// a fresh snapshot. --revert-all has no later pass. Verify its post-state
+	// here so a rejected write cannot be printed as "ok" immediately before
+	// uninstalling the operator.
+	after, err := apply.ReadSnapshot(dir)
+	if err != nil {
+		if errors.Is(err, cgroup.ErrCgroupGone) {
+			result.status = "gone"
+			return result
+		}
+		result.status = "error"
+		result.err = fmt.Errorf("verify reverted snapshot: %w", err)
+		return result
+	}
+	if remaining := apply.BuildPlan(tier.State{}, after, qos.RestoreWeight(pod.Spec)); len(remaining) != 0 {
+		result.status = "error"
+		result.err = fmt.Errorf("revert incomplete: cgroup still requires writes to %s", planKnobs(remaining))
+		return result
+	}
+
 	result.status = "ok"
 	return result
+}
+
+func planContainsKnob(plan []apply.Write, knob string) bool {
+	for _, write := range plan {
+		if write.Knob == knob {
+			return true
+		}
+	}
+	return false
+}
+
+func planKnobs(plan []apply.Write) string {
+	knobs := make([]string, 0, len(plan))
+	for _, write := range plan {
+		knobs = append(knobs, write.Knob)
+	}
+	return strings.Join(knobs, ",")
 }
 
 // describeActiveTiers reports which of the two tiers snapshot shows active

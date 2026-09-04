@@ -132,3 +132,51 @@ func TestVC3QoSFromSpec(t *testing.T) {
 		}
 	})
 }
+
+func TestClassOfUsesPodLevelResources(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{{Name: "app"}},
+		Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		},
+	}
+
+	if got := ClassOf(spec); got != Guaranteed {
+		t.Fatalf("ClassOf() = %s, want %s from pod-level requests and limits", got, Guaranteed)
+	}
+}
+
+func TestClassOfMatchesKubernetes136ForEmptyPodLevelResources(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: containerResources("500m", "256Mi", "500m", "256Mi"),
+		}},
+		Resources: &corev1.ResourceRequirements{},
+	}
+
+	if got := ClassOf(spec); got != BestEffort {
+		t.Fatalf("ClassOf() = %s, want BestEffort: Kubernetes 1.36 gives any non-nil pod resources precedence", got)
+	}
+}
+
+func TestHasCPUQuotaMatchesBestEffortPodLevelOverride(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{{
+			Name:      "app",
+			Resources: containerResources("500m", "256Mi", "500m", "256Mi"),
+		}},
+		Resources: &corev1.ResourceRequirements{},
+	}
+
+	if HasCPUQuota(spec) {
+		t.Fatal("HasCPUQuota() = true, want false: Kubernetes 1.36 treats the pod as BestEffort and does not install a pod CPU quota")
+	}
+}

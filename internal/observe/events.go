@@ -36,12 +36,17 @@ const (
 	// ReasonWriteRejected fires when an attempted cgroup write was
 	// refused (e.g. the kernel returned EINVAL).
 	ReasonWriteRejected Reason = "WriteRejected"
+	// ReasonIdleSuppressed fires when the node guard suppresses an idle-tier
+	// pod while non-idle CPU pressure is high.
+	ReasonIdleSuppressed Reason = "IdleSuppressed"
+	// ReasonIdleRestored fires when the node guard releases a suppression it
+	// owns, including recovery after an enabled restart or explicit cleanup.
+	ReasonIdleRestored Reason = "IdleRestored"
 )
 
-// EventRecorder is a thin wrapper over record.EventRecorder — the same
-// interface type a controller-runtime manager hands out from
-// GetEventRecorderFor — that restricts every call to this package's fixed
-// Reason vocabulary and types the involved object as *corev1.Pod, so a
+// EventRecorder is a thin wrapper over client-go's record.EventRecorder
+// that restricts every call to this package's fixed Reason vocabulary and
+// types the involved object as *corev1.Pod, so a
 // caller cannot raise an Event against anything else: this operator only
 // ever has an opinion about the pod a tier annotation names.
 type EventRecorder struct {
@@ -95,4 +100,14 @@ func (e *EventRecorder) EnvironmentUnsupported(pod *corev1.Pod, messageFmt strin
 // WriteRejected records ReasonWriteRejected against pod.
 func (e *EventRecorder) WriteRejected(pod *corev1.Pod, messageFmt string, args ...any) {
 	e.emit(pod, corev1.EventTypeWarning, ReasonWriteRejected, messageFmt, args...)
+}
+
+// IdleSuppressed records ReasonIdleSuppressed against pod.
+func (e *EventRecorder) IdleSuppressed(pod *corev1.Pod, messageFmt string, args ...any) {
+	e.emit(pod, corev1.EventTypeNormal, ReasonIdleSuppressed, messageFmt, args...)
+}
+
+// IdleRestored records ReasonIdleRestored against pod.
+func (e *EventRecorder) IdleRestored(pod *corev1.Pod, messageFmt string, args ...any) {
+	e.emit(pod, corev1.EventTypeNormal, ReasonIdleRestored, messageFmt, args...)
 }

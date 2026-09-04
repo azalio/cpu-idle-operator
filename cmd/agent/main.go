@@ -8,8 +8,8 @@
 // (INV-4) — see internal/agent/lifecycle.go's doc comment for why.
 //
 // --revert-all is the one sanctioned exception to INV-4 (resolution
-// T-007): a human explicitly runs it, as a standalone Job, right before
-// the operator is removed from the cluster. main routes it to
+// T-007): a human explicitly runs it via exec or a standalone Job right
+// before the operator is removed from the cluster. main routes it to
 // agent.RunRevertAll before Lifecycle ever starts, and exits without
 // touching Lifecycle's informer/HTTP-server loop at all.
 package main

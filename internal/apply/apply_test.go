@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,18 +35,147 @@ type fakeWriteCall struct {
 // against a real filesystem's final contents can distinguish from a
 // reordered-but-converging implementation.
 type fakeWriter struct {
-	calls   []fakeWriteCall
-	results map[string]error
+	calls      []fakeWriteCall
+	results    map[string]error
+	afterWrite func(callCount int)
 }
 
 func (f *fakeWriter) WriteKnob(root, kubepodsName, dir, name, value string) error {
 	f.calls = append(f.calls, fakeWriteCall{root, dir, name, value})
+	if f.afterWrite != nil {
+		f.afterWrite(len(f.calls))
+	}
 	if f.results != nil {
 		if err, ok := f.results[name]; ok {
 			return err
 		}
 	}
 	return nil
+}
+
+func TestApplyStopsStartingWritesAfterCancellation(t *testing.T) {
+	root := t.TempDir()
+	const uid = "abababab-abab-abab-abab-abababababab"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "20", "100000 100000", "0")
+	pod := testPod(uid, "500m", map[string]string{
+		annotations.TierKey:  annotations.TierValueIdle,
+		annotations.BurstKey: "",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := &fakeWriter{afterWrite: func(callCount int) {
+		if callCount == 1 {
+			cancel()
+		}
+	}}
+	recorder, events, _, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	if err := applier.Apply(ctx, pod, true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Apply error = %v, want context.Canceled", err)
+	}
+	if len(writer.calls) != 1 || writer.calls[0].name != KnobCPUMaxBurst {
+		t.Fatalf("writer.calls = %+v, want only the first planned write", writer.calls)
+	}
+}
+
+func TestApplyReportsAnnotationNoticeOnlyAfterRetryableWritesSucceed(t *testing.T) {
+	root := t.TempDir()
+	const uid = "adadadad-adad-adad-adad-adadadadadad"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, uid,
+		"1", "1", "max 100000", "0")
+	pod := testPod(uid, "", map[string]string{annotations.TierKey: "aggressive"})
+	writer := &fakeWriter{results: map[string]error{
+		KnobCPUIdle: errors.New("temporary idle failure"),
+	}}
+	recorder, events, fakeEvents, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	if err := applier.Apply(context.Background(), pod, true); err == nil {
+		t.Fatal("first Apply error = nil, want retryable write failure")
+	}
+	if got := countEventReason(fakeEvents.calls, string(observe.ReasonTierValueUnknown)); got != 0 {
+		t.Fatalf("unknown-tier events after failed apply = %d, want 0 until the reconcile can commit its notice state", got)
+	}
+
+	delete(writer.results, KnobCPUIdle)
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
+		t.Fatalf("second Apply error = %v", err)
+	}
+	if got := countEventReason(fakeEvents.calls, string(observe.ReasonTierValueUnknown)); got != 1 {
+		t.Fatalf("unknown-tier events after successful retry = %d, want exactly 1", got)
+	}
+}
+
+func TestApplySuppressesOnlyDeduplicatedAnnotationNotices(t *testing.T) {
+	root := t.TempDir()
+	const uid = "aeaeaeae-aeae-aeae-aeae-aeaeaeaeaeae"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, uid,
+		"1", "1", "max 100000", "0")
+	pod := testPod(uid, "", map[string]string{annotations.TierKey: "future-tier"})
+	writer := &fakeWriter{}
+	recorder, events, fakeEvents, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	if err := applier.Apply(context.Background(), pod, false); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if got := countEventReason(fakeEvents.calls, string(observe.ReasonTierValueUnknown)); got != 0 {
+		t.Fatalf("unknown-tier events = %d, want 0 for an unchanged notice", got)
+	}
+	if len(writer.calls) != 2 {
+		t.Fatalf("writer calls = %+v, want cpu.idle and cpu.weight reverts", writer.calls)
+	}
+	if len(fakeEvents.calls) != len(writer.calls) {
+		t.Fatalf("write outcome events = %d, want %d: notice de-dup must not suppress write traces", len(fakeEvents.calls), len(writer.calls))
+	}
+}
+
+func countEventReason(calls []fakeEventCall, reason string) int {
+	count := 0
+	for _, call := range calls {
+		if call.reason == reason {
+			count++
+		}
+	}
+	return count
+}
+
+func TestApplyRepairsInterruptedWeightBeforeReenablingIdle(t *testing.T) {
+	root := t.TempDir()
+	const uid = "acacacac-acac-acac-acac-acacacacacac"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "100", "max 100000", "0")
+	pod := testPodWithCPURequest(uid, "500m")
+	pod.Annotations = map[string]string{annotations.TierKey: annotations.TierValueIdle}
+	writer := &fakeWriter{results: map[string]error{
+		KnobCPUWeight: errors.New("temporary weight failure"),
+	}}
+	recorder, events, _, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	// Drive the journal through the real transition: cpu.idle=0 succeeded,
+	// then the paired weight restore failed.
+	wasIdle := Snapshot{IdleActive: true, Weight: 1, HasQuota: false}
+	if err := applier.Revert(context.Background(), pod, wasIdle); err == nil {
+		t.Fatal("Revert error = nil, want interrupted weight restore")
+	}
+	delete(writer.results, KnobCPUWeight)
+	beforeRetry := len(writer.calls)
+
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
+		t.Fatalf("Apply after re-adding idle: %v", err)
+	}
+	retryCalls := writer.calls[beforeRetry:]
+	if len(retryCalls) != 2 {
+		t.Fatalf("retry calls = %+v, want weight repair then idle enable", retryCalls)
+	}
+	if retryCalls[0].name != KnobCPUWeight || retryCalls[0].value != "20" {
+		t.Fatalf("first retry write = %+v, want cpu.weight=20", retryCalls[0])
+	}
+	if retryCalls[1].name != KnobCPUIdle || retryCalls[1].value != "1" {
+		t.Fatalf("second retry write = %+v, want cpu.idle=1", retryCalls[1])
+	}
 }
 
 // fakeEventCall is one recorded record.EventRecorder call.
@@ -165,7 +295,7 @@ func TestVC1BurstEqualsQuota(t *testing.T) {
 		recorder, events, _, _ := newTestObservers("node-a")
 		applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-		if err := applier.Apply(context.Background(), pod); err != nil {
+		if err := applier.Apply(context.Background(), pod, true); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
 
@@ -189,7 +319,7 @@ func TestVC1BurstEqualsQuota(t *testing.T) {
 		recorder, events, _, _ := newTestObservers("node-a")
 		applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-		if err := applier.Apply(context.Background(), pod); err != nil {
+		if err := applier.Apply(context.Background(), pod, true); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
 
@@ -214,7 +344,7 @@ func TestVC4UnknownValueVsMissingCgroup(t *testing.T) {
 		recorder, events, fakeEvents, _ := newTestObservers("node-a")
 		applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-		if err := applier.Apply(context.Background(), pod); err != nil {
+		if err := applier.Apply(context.Background(), pod, true); err != nil {
 			t.Fatalf("Apply() error = %v", err)
 		}
 
@@ -244,7 +374,7 @@ func TestVC4UnknownValueVsMissingCgroup(t *testing.T) {
 		recorder, events, fakeEvents, _ := newTestObservers("node-a")
 		applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-		err := applier.Apply(context.Background(), pod)
+		err := applier.Apply(context.Background(), pod, true)
 		if err != nil {
 			t.Fatalf("Apply() error = %v, want nil", err)
 		}
@@ -253,6 +383,25 @@ func TestVC4UnknownValueVsMissingCgroup(t *testing.T) {
 		}
 		if len(fakeEvents.calls) != 0 {
 			t.Fatalf("event calls = %+v, want none", fakeEvents.calls)
+		}
+	})
+
+	t.Run("test_vc4_missing_pod_cgroup_suppresses_annotation_notice_too", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "45454545-4545-4545-4545-454545454545"
+		pod := testPod(uid, "", map[string]string{annotations.TierKey: "aggressive"})
+		writer := &fakeWriter{}
+		recorder, events, fakeEvents, _ := newTestObservers("node-a")
+		applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+		if err := applier.Apply(context.Background(), pod, true); err != nil {
+			t.Fatalf("Apply() error = %v, want nil", err)
+		}
+		if len(writer.calls) != 0 {
+			t.Fatalf("writer.calls = %+v, want none", writer.calls)
+		}
+		if len(fakeEvents.calls) != 0 {
+			t.Fatalf("event calls = %+v, want none for a disappeared pod", fakeEvents.calls)
 		}
 	})
 }
@@ -278,7 +427,7 @@ func TestVC5EveryWriteLeavesTrace(t *testing.T) {
 	recorder, events, fakeEvents, registry := newTestObservers("node-a")
 	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -333,7 +482,7 @@ func TestApplyEINVALIsRejectedNotRetried(t *testing.T) {
 	recorder, events, fakeEvents, registry := newTestObservers("node-a")
 	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v, want nil (EINVAL is recorded, not surfaced for a retry loop)", err)
 	}
 
@@ -397,7 +546,7 @@ func TestApplyWeightRestoreReportsReverted(t *testing.T) {
 	recorder, events, fakeEvents, _ := newTestObservers("node-a")
 	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -416,5 +565,49 @@ func TestApplyWeightRestoreReportsReverted(t *testing.T) {
 		if call.reason != string(observe.ReasonTierReverted) {
 			t.Errorf("event[%d].reason = %q, want %q (a weight restore is a revert-side effect of clearing cpu.idle, never an install)", i, call.reason, observe.ReasonTierReverted)
 		}
+	}
+}
+
+func TestApplyReportsBurstInactiveWhenActualQuotaIsMissing(t *testing.T) {
+	root := t.TempDir()
+	const uid = "89898989-1111-2222-3333-444444444444"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "1", "max 100000", "0")
+	pod := testPod(uid, "500m", map[string]string{annotations.BurstKey: ""})
+	writer := &fakeWriter{}
+	recorder, events, fakeEvents, registry := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(writer.calls) != 0 {
+		t.Fatalf("writer.calls = %+v, want none without an actual cpu.max quota", writer.calls)
+	}
+	if len(fakeEvents.calls) != 1 || fakeEvents.calls[0].reason != string(observe.ReasonTierInactive) {
+		t.Fatalf("events = %+v, want one TierInactive", fakeEvents.calls)
+	}
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	var found bool
+	for _, family := range families {
+		if family.GetName() != "cpu_tier_apply_total" {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, pair := range metric.GetLabel() {
+				labels[pair.GetName()] = pair.GetValue()
+			}
+			if labels["result"] == string(observe.TierApplyResultInactive) && labels["reason"] == string(observe.TierApplyReasonCgroupQuotaMissing) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("cpu_tier_apply_total has no inactive/cgroup_quota_missing series: %+v", families)
 	}
 }

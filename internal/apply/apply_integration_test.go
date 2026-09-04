@@ -33,7 +33,7 @@ func TestIntegrationApplyBothTiersWritesRealFiles(t *testing.T) {
 	recorder, events, _, _ := newTestObservers("node-a")
 	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -62,7 +62,7 @@ func TestIntegrationApplyRevertBothTiersWritesRealFiles(t *testing.T) {
 	recorder, events, _, _ := newTestObservers("node-a")
 	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestIntegrationApplyNoPlanTouchesNoFiles(t *testing.T) {
 	recorder, events, _, _ := newTestObservers("node-a")
 	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
 
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestSeamWeightRestoredWhenOnlyTierRemoved(t *testing.T) {
 
 	recorder, events, _, _ := newTestObservers("node-a")
 	applier := NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, events)
-	if err := applier.Apply(context.Background(), pod); err != nil {
+	if err := applier.Apply(context.Background(), pod, true); err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
 	assertKnobContent(t, dir, KnobCPUIdle, "0")

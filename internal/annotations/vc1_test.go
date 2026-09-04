@@ -88,12 +88,10 @@ func TestVC1NoForbiddenComponents(t *testing.T) {
 	goMod := string(goModBytes)
 	// Intent: this must catch our own code directly requiring a
 	// CRD-generator dependency, not merely appear anywhere in the module
-	// graph. A library this project legitimately depends on for other
-	// reasons (e.g. sigs.k8s.io/controller-runtime, whose own go.mod
-	// requires k8s.io/apiextensions-apiserver) can pull one of these in as
-	// a transitive, "// indirect" line without this project ever calling
-	// any CRD/generator code itself. Only a direct (non-indirect) require
-	// line is real signal that this project's own code reaches for one.
+	// graph. A transitive library can pull one of these in as a
+	// "// indirect" line without this project ever calling any CRD/generator
+	// code itself. Only a direct (non-indirect) require line is real signal
+	// that this project's own code reaches for one.
 	for _, line := range strings.Split(goMod, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasSuffix(trimmed, "// indirect") {

@@ -15,13 +15,17 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 
-# CGO_ENABLED=0 plus GOOS=linux is required regardless of build host:
-# internal/cgroup only compiles under Linux (cgroup v2 syscalls), and a
-# static binary is what makes the distroless "static" base work at all.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+# CGO_ENABLED=0 produces the static Linux binary required by the distroless
+# runtime image. BuildKit supplies TARGETOS/TARGETARCH for cross-platform
+# builds. Docker-compatible engines that omit those automatic args still
+# build correctly for the selected builder image instead of silently forcing
+# an amd64 binary into (for example) an arm64 image.
+RUN target_os="${TARGETOS:-$(go env GOOS)}"; \
+    target_arch="${TARGETARCH:-$(go env GOARCH)}"; \
+    CGO_ENABLED=0 GOOS="${target_os}" GOARCH="${target_arch}" \
     go build -trimpath -ldflags="-s -w" -o /out/cpu-idle-agent ./cmd/agent
 
 FROM gcr.io/distroless/static-debian12:latest

@@ -167,10 +167,12 @@ func TestNormalizeTierApplyReasonKnownValuesRoundTrip(t *testing.T) {
 		TierApplyReasonOK,
 		TierApplyReasonValueUnknown,
 		TierApplyReasonLimitsCPUMissing,
+		TierApplyReasonCgroupQuotaMissing,
 		TierApplyReasonEnvironmentUnsupported,
 		TierApplyReasonCgroupGone,
 		TierApplyReasonNotPodCgroup,
 		TierApplyReasonEINVAL,
+		TierApplyReasonNodeGuard,
 	}
 	for _, reason := range knownReasons {
 		t.Run(string(reason), func(t *testing.T) {

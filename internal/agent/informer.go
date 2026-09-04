@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -56,10 +57,13 @@ type ReconcileFunc func(ctx context.Context, key string, resync bool) error
 // cache. Informer registers all three handlers to rule that out
 // structurally, not just by convention.
 type Informer struct {
-	factory  informers.SharedInformerFactory
-	informer cache.SharedIndexInformer
-	lister   corelisters.PodLister
-	queue    workqueue.TypedRateLimitingInterface[reconcileRequest]
+	factory           informers.SharedInformerFactory
+	informer          cache.SharedIndexInformer
+	lister            corelisters.PodLister
+	queue             workqueue.TypedRateLimitingInterface[reconcileRequest]
+	logger            *slog.Logger
+	failedReconciles  map[string]struct{}
+	onReconcileHealth func(healthy bool)
 }
 
 // NewInformer builds an Informer scoped to nodeName's pods, resyncing
@@ -90,10 +94,12 @@ func NewInformer(client kubernetes.Interface, nodeName string, resyncPeriod time
 	queue := workqueue.NewTypedRateLimitingQueue[reconcileRequest](workqueue.DefaultTypedControllerRateLimiter[reconcileRequest]())
 
 	inf := &Informer{
-		factory:  factory,
-		informer: podInformer.Informer(),
-		lister:   podInformer.Lister(),
-		queue:    queue,
+		factory:          factory,
+		informer:         podInformer.Informer(),
+		lister:           podInformer.Lister(),
+		queue:            queue,
+		logger:           slog.Default(),
+		failedReconciles: make(map[string]struct{}),
 	}
 
 	if _, err := inf.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -197,9 +203,40 @@ func (inf *Informer) processNextItem(ctx context.Context, reconcile ReconcileFun
 	defer inf.queue.Done(req)
 
 	if err := reconcile(ctx, req.key, req.resync); err != nil {
+		if ctx.Err() != nil {
+			// Cancellation is the normal shutdown edge, not a failed pod.
+			// Forget it instead of emitting a misleading error, flipping
+			// readiness, and scheduling work onto a shutting-down queue.
+			inf.queue.Forget(req)
+			return true
+		}
+		if inf.failedReconciles == nil {
+			inf.failedReconciles = make(map[string]struct{})
+		}
+		if inf.logger == nil {
+			inf.logger = slog.Default()
+		}
+		inf.failedReconciles[req.key] = struct{}{}
+		inf.reportReconcileHealth()
+		inf.logger.Error("agent: reconcile failed; requeueing",
+			"pod", req.key,
+			"resync", req.resync,
+			"requeues", inf.queue.NumRequeues(req)+1,
+			"error", err)
 		inf.queue.AddRateLimited(req)
 		return true
 	}
+	if inf.failedReconciles == nil {
+		inf.failedReconciles = make(map[string]struct{})
+	}
+	delete(inf.failedReconciles, req.key)
+	inf.reportReconcileHealth()
 	inf.queue.Forget(req)
 	return true
+}
+
+func (inf *Informer) reportReconcileHealth() {
+	if inf.onReconcileHealth != nil {
+		inf.onReconcileHealth(len(inf.failedReconciles) == 0)
+	}
 }

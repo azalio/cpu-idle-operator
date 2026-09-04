@@ -10,7 +10,7 @@ import (
 )
 
 // Recorder pairs a cpu_tier_apply_total increment with exactly one Event on
-// the pod involved, for each of its four outcome methods — the single
+// the pod involved, for each of its outcome methods — the single
 // enforcement point for CCR-1 ("every real cgroup change carries an Event
 // and a metric increment, never one without the other"). Every other
 // package in this operator that needs to report a tier-apply outcome must
@@ -86,6 +86,16 @@ func (r *Recorder) Rejected(pod *corev1.Pod, knob, result, reason string) {
 	r.record(pod, knob, result, reason, r.events.WriteRejected)
 }
 
+// IdleSuppressed records a node-guard cgroup change and its paired Event.
+func (r *Recorder) IdleSuppressed(pod *corev1.Pod, knob string) {
+	r.record(pod, knob, string(TierApplyResultApplied), string(TierApplyReasonNodeGuard), r.events.IdleSuppressed)
+}
+
+// IdleRestored records removal of a node-guard suppression and its paired Event.
+func (r *Recorder) IdleRestored(pod *corev1.Pod, knob string) {
+	r.record(pod, knob, string(TierApplyResultReverted), string(TierApplyReasonNodeGuard), r.events.IdleRestored)
+}
+
 // TierApplyResult is this package's fixed, bounded vocabulary for the
 // cpu_tier_apply_total counter's result label (HC-5), modeled on
 // envgate.Reason. record normalizes any caller-supplied result string
@@ -143,6 +153,9 @@ const (
 	// pod with no limits.cpu, so the tier cannot take effect (AC-4) — the
 	// deliberate no-op behind a TierInactive Event.
 	TierApplyReasonLimitsCPUMissing TierApplyReason = "limits_cpu_missing"
+	// TierApplyReasonCgroupQuotaMissing means the Pod spec predicts a CPU
+	// quota but the live pod cgroup still reports cpu.max as unbounded.
+	TierApplyReasonCgroupQuotaMissing TierApplyReason = "cgroup_quota_missing"
 	// TierApplyReasonEnvironmentUnsupported mirrors
 	// ReasonEnvironmentUnsupported: the node failed the environment gate
 	// (cgroup v2 unified, a recognized kubepods driver, kernel >= 5.15),
@@ -161,6 +174,9 @@ const (
 	// cgroup package's knob layer preserves through errors.Is so callers
 	// can distinguish it from any other write failure.
 	TierApplyReasonEINVAL TierApplyReason = "einval"
+	// TierApplyReasonNodeGuard identifies pressure-driven suppression and
+	// restoration performed by the node guard.
+	TierApplyReasonNodeGuard TierApplyReason = "node_guard"
 	// TierApplyReasonOther is the fallback for any reason value outside
 	// this vocabulary, most commonly raw kernel or filesystem error text
 	// that carries no distinguishable sentinel.
@@ -174,10 +190,12 @@ func normalizeTierApplyReason(reason string) TierApplyReason {
 	case TierApplyReasonOK,
 		TierApplyReasonValueUnknown,
 		TierApplyReasonLimitsCPUMissing,
+		TierApplyReasonCgroupQuotaMissing,
 		TierApplyReasonEnvironmentUnsupported,
 		TierApplyReasonCgroupGone,
 		TierApplyReasonNotPodCgroup,
-		TierApplyReasonEINVAL:
+		TierApplyReasonEINVAL,
+		TierApplyReasonNodeGuard:
 		return TierApplyReason(reason)
 	default:
 		return TierApplyReasonOther

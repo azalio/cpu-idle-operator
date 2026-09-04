@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -94,4 +95,69 @@ func TestVC3DefaultsAndOverrides(t *testing.T) {
 			t.Fatalf("ParseFlags() error = %v, want ErrEmptyNodeName", err)
 		}
 	})
+}
+
+func TestGuardFlagsRejectUnsafeValues(t *testing.T) {
+	t.Setenv("NODE_NAME", "node-a")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "negative high", args: []string{"--guard-high=-0.1"}, want: "--guard-high"},
+		{name: "nan high", args: []string{"--guard-high=NaN"}, want: "--guard-high"},
+		{name: "nan low", args: []string{"--guard-high=0.7", "--guard-low=NaN"}, want: "--guard-low"},
+		{name: "zero period", args: []string{"--guard-high=0.7", "--guard-period=0s"}, want: "--guard-period"},
+		{name: "negative period", args: []string{"--guard-high=0.7", "--guard-period=-1s"}, want: "--guard-period"},
+		{name: "malformed floor", args: []string{"--guard-high=0.7", "--guard-floor=wat"}, want: "--guard-floor"},
+		{name: "unbounded floor", args: []string{"--guard-high=0.7", "--guard-floor=max 100000"}, want: "--guard-floor"},
+		{name: "zero quota", args: []string{"--guard-high=0.7", "--guard-floor=0 100000"}, want: "--guard-floor"},
+		{name: "period below kernel minimum", args: []string{"--guard-high=0.7", "--guard-floor=1000 999"}, want: "--guard-floor"},
+		{name: "removed freeze mode", args: []string{"--guard-freeze=true"}, want: "flag provided but not defined"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseFlags(tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ParseFlags(%v) error = %v, want error containing %q", tc.args, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseFlagsCanonicalizesGuardFloor(t *testing.T) {
+	t.Setenv("NODE_NAME", "node-a")
+	cfg, err := ParseFlags([]string{"--guard-floor= 010000   100000 "})
+	if err != nil {
+		t.Fatalf("ParseFlags() error = %v", err)
+	}
+	if cfg.GuardFloor != "10000 100000" {
+		t.Fatalf("GuardFloor = %q, want canonical cpu.max value", cfg.GuardFloor)
+	}
+}
+
+func TestParseFlagsRejectsUnsafeCoreValues(t *testing.T) {
+	t.Setenv("NODE_NAME", "node-a")
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "zero resync", args: []string{"--resync-period=0s"}, want: "--resync-period"},
+		{name: "negative resync", args: []string{"--resync-period=-1s"}, want: "--resync-period"},
+		{name: "relative cgroup root", args: []string{"--cgroup-root=relative"}, want: "--cgroup-root"},
+		{name: "empty kubepods name", args: []string{"--kubepods-name="}, want: "--kubepods-name"},
+		{name: "traversing kubepods name", args: []string{"--kubepods-name=../kubepods"}, want: "--kubepods-name"},
+		{name: "positional argument", args: []string{"surprise"}, want: "unexpected positional"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseFlags(tc.args)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ParseFlags(%v) error = %v, want error containing %q", tc.args, err, tc.want)
+			}
+		})
+	}
 }

@@ -131,3 +131,21 @@ func TestBuildPlanIdleOffRestoresWeight(t *testing.T) {
 		t.Fatalf("BuildPlan() = %+v, want %+v", got, want)
 	}
 }
+
+func TestBuildPlanDoesNotClaimAmbiguousDefaultWeight(t *testing.T) {
+	desired := tier.State{}
+	actual := Snapshot{IdleActive: false, Weight: 100, HasQuota: false, Burst: 0}
+
+	if got := BuildPlan(desired, actual, 20); len(got) != 0 {
+		t.Fatalf("BuildPlan() = %+v, want no write: weight 100 alone does not prove ownership", got)
+	}
+}
+
+func TestBuildPlanDoesNotOwnArbitraryWeightDrift(t *testing.T) {
+	desired := tier.State{}
+	actual := Snapshot{IdleActive: false, Weight: 99, HasQuota: false, Burst: 0}
+
+	if got := BuildPlan(desired, actual, 20); len(got) != 0 {
+		t.Fatalf("BuildPlan() = %+v, want no write for weight drift without the kernel reset signature", got)
+	}
+}

@@ -35,9 +35,11 @@ import (
 // path converges with kind's real kubelet layout once patched this way. If
 // that precondition ever regresses, it fails as its own, more specific,
 // merge-blocking check — this test does not re-litigate convergence, it
-// exercises the full DaemonSet apply/revert cycle on top of it: apply the
-// idle tier, read cpu.idle=1 from the node, remove the annotation, and read
-// cpu.idle=0 with the restored weight back from the node.
+// exercises the full DaemonSet apply/resync/revert cycle on top of it:
+// apply the idle tier, read cpu.idle=1 and the kernel's idle minimum weight
+// from the node, introduce out-of-band drift without changing the Pod, wait
+// for the informer's periodic resync to repair it, remove the annotation,
+// and read cpu.idle=0 with the restored weight back from the node.
 func TestKindApplyAndRevert(t *testing.T) {
 	clientset := kubeClient(t)
 	requireNodeReachable(t)
@@ -48,8 +50,9 @@ func TestKindApplyAndRevert(t *testing.T) {
 	patchKindCgroupFlags(t)
 	t.Cleanup(func() { deleteConfigBase(t) })
 
-	agentPod := waitForAgentPodRunning(t, ctx, clientset, podReadyTimeout)
-	t.Logf("agent DaemonSet pod %s/%s is Running", agentPod.Namespace, agentPod.Name)
+	waitForAgentRollout(t)
+	agentPod := waitForAgentPodReady(t, ctx, clientset, podReadyTimeout)
+	t.Logf("agent DaemonSet pod %s/%s is Ready", agentPod.Namespace, agentPod.Name)
 
 	ns := createTempNamespace(t, ctx, clientset, "cpu-e2e")
 	defer deleteNamespace(t, clientset, ns)
@@ -72,14 +75,30 @@ func TestKindApplyAndRevert(t *testing.T) {
 }
 
 // runPositiveTierScenario exercises AC-10 for real: apply the idle tier
-// through the live DaemonSet, read the actual cpu.idle byte back from the
-// node's cgroupfs, remove the annotation, and confirm both cpu.idle=0 and
-// the request-derived cpu.weight are restored.
+// through the live DaemonSet, read the actual cpu.idle and cpu.weight bytes
+// back from the node's cgroupfs, introduce drift without a Kubernetes
+// update and wait for the periodic resync to repair it, remove the
+// annotation, and confirm both cpu.idle=0 and the request-derived
+// cpu.weight are restored.
 func runPositiveTierScenario(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, agentPath string, pod *corev1.Pod) {
 	t.Helper()
 
 	waitForNodeFileValue(t, agentPath, apply.KnobCPUIdle, "1", podReadyTimeout)
-	t.Logf("cpu.idle=1 confirmed at %s after applying %s=%s", agentPath, annotations.TierKey, annotations.TierValueIdle)
+	idleWeight := waitForNodeIdleWeight(t, agentPath, podReadyTimeout)
+	t.Logf("cpu.idle=1 and cpu.weight=%s confirmed at %s after applying %s=%s", idleWeight, agentPath, annotations.TierKey, annotations.TierValueIdle)
+
+	// No Kubernetes object changes after this write, so only the informer's
+	// periodic full resync can observe and repair it. Clearing cpu.idle also
+	// makes the kernel reset cpu.weight; a successful repair must therefore
+	// converge both files back to their idle state.
+	if err := writeNodeFile(agentPath+"/"+apply.KnobCPUIdle, "0"); err != nil {
+		t.Fatalf("introduce out-of-band cpu.idle drift at %s: %v", agentPath, err)
+	}
+	waitForNodeFileValue(t, agentPath, apply.KnobCPUIdle, "0", pollInterval)
+	driftedAt := time.Now()
+	waitForNodeFileValue(t, agentPath, apply.KnobCPUIdle, "1", podReadyTimeout)
+	idleWeight = waitForNodeIdleWeight(t, agentPath, podReadyTimeout)
+	t.Logf("periodic resync repaired cpu.idle and restored cpu.weight=%s after %s", idleWeight, time.Since(driftedAt).Round(time.Second))
 
 	removeTierAnnotation(t, ctx, clientset, pod.Namespace, pod.Name)
 
@@ -117,4 +136,26 @@ func waitForNodeFileValue(t *testing.T, path, knob, want string, timeout time.Du
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("timed out waiting for %s/%s == %q; last read: %q (err: %v)", path, knob, want, last, lastErr)
+}
+
+// waitForNodeIdleWeight accepts both representations seen on real cgroup v2
+// kernels after cpu.idle becomes 1. Mainline documents cpu.weight as 0 for an
+// idle group, while the Apple Container kernel 6.18 exposes the same effective
+// minimum as 1 (the normal cpu.weight interface's lowest representable value).
+// cpu.idle itself remains the authoritative state bit; accepting any larger
+// weight here would hide a real failure to enter the idle scheduling class.
+func waitForNodeIdleWeight(t *testing.T, path string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		last, lastErr = readNodeFile(path + "/" + apply.KnobCPUWeight)
+		if lastErr == nil && (last == "0" || last == "1") {
+			return last
+		}
+		time.Sleep(pollInterval)
+	}
+	t.Fatalf("timed out waiting for %s/%s to be the idle minimum (0 or 1); last read: %q (err: %v)", path, apply.KnobCPUWeight, last, lastErr)
+	return "" // unreachable after Fatalf; keeps the return contract explicit
 }

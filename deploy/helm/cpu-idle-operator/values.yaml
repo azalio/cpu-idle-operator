@@ -38,6 +38,16 @@ kubepodsName: kubepods
 metricsAddr: ":8080"
 healthAddr: ":8081"
 
+# Optional node-pressure guard. A high threshold of 0 disables it. When
+# enabled, the agent temporarily caps live, unbounded idle-tier pod cgroups
+# at floor after two consecutive samples above high, and restores only state
+# it owns after two consecutive samples below low.
+guard:
+  high: 0
+  low: 0.60
+  period: 5s
+  floor: "10000 100000"
+
 nodeSelector: {}
 tolerations: []
 affinity: {}

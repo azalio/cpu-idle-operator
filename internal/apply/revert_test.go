@@ -42,6 +42,28 @@ func testPodWithCPURequest(uid, cpuRequest string) *corev1.Pod {
 	return pod
 }
 
+func TestRevertStopsStartingWritesAfterCancellation(t *testing.T) {
+	root := t.TempDir()
+	const uid = "acacacac-acac-acac-acac-acacacacacac"
+	pod := testPodWithCPURequest(uid, "500m")
+	state := Snapshot{IdleActive: true, Weight: 1, HasQuota: true, Quota: 100000, Burst: 100000}
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := &fakeWriter{afterWrite: func(callCount int) {
+		if callCount == 1 {
+			cancel()
+		}
+	}}
+	recorder, events, _, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	if err := applier.Revert(ctx, pod, state); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Revert error = %v, want context.Canceled", err)
+	}
+	if len(writer.calls) != 1 || writer.calls[0].name != KnobCPUIdle {
+		t.Fatalf("writer.calls = %+v, want only the first planned write", writer.calls)
+	}
+}
+
 // TestVC1RevertRestoresMeasuredPair covers VC1 [AC-2]: reverting a pod with
 // requests.cpu 500m against the exact measured pair from resolution
 // T-005/T-006 (idle 1->0 leaves weight at the kernel default until this
@@ -285,4 +307,32 @@ func TestRevertBurstOnly(t *testing.T) {
 			t.Errorf("write = %+v, want {name: %q, value: \"0\"}", call, KnobCPUMaxBurst)
 		}
 	})
+}
+
+func TestRevertRetriesOnlyItsOwnInterruptedWeightRestore(t *testing.T) {
+	root := t.TempDir()
+	const uid = "abababab-abab-abab-abab-abababababab"
+	pod := testPodWithCPURequest(uid, "500m")
+	writer := &fakeWriter{results: map[string]error{KnobCPUWeight: errors.New("temporary weight failure")}}
+	recorder, events, _, _ := newTestObservers("node-a")
+	applier := newTestApplier(root, cgroup.DriverCgroupfs, writer, recorder, events)
+
+	first := Snapshot{IdleActive: true, Weight: 1, HasQuota: false, Burst: 0}
+	if err := applier.Revert(context.Background(), pod, first); err == nil {
+		t.Fatal("first Revert() error = nil, want temporary weight failure")
+	}
+	delete(writer.results, KnobCPUWeight)
+
+	second := Snapshot{IdleActive: false, Weight: 100, HasQuota: false, Burst: 0}
+	if err := applier.Revert(context.Background(), pod, second); err != nil {
+		t.Fatalf("retry Revert() error = %v", err)
+	}
+	if got := writer.calls[len(writer.calls)-1]; got.name != KnobCPUWeight || got.value != "20" {
+		t.Fatalf("last retry write = %+v, want owned cpu.weight=20", got)
+	}
+
+	unowned := newTestApplier(root, cgroup.DriverCgroupfs, &fakeWriter{}, recorder, events)
+	if unowned.NeedsWeightRepair(pod, second) {
+		t.Fatal("fresh Applier claimed an ambiguous cpu.weight without transition ownership")
+	}
 }

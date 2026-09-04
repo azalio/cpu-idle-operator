@@ -52,6 +52,10 @@ spec:
             - --resync-period=60s
             - --metrics-addr=:8080
             - --health-addr=:8081
+            - --guard-high=0
+            - --guard-low=0.6
+            - --guard-period=5s
+            - "--guard-floor=10000 100000"
           env:
             # NODE_NAME is mandatory: internal/config.ParseFlags treats an
             # empty node name as a fatal startup error rather than falling

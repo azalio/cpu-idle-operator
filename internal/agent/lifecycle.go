@@ -13,14 +13,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/azalio/cpu-idle-operator/internal/apply"
 	"github.com/azalio/cpu-idle-operator/internal/config"
@@ -36,8 +35,8 @@ const componentName = "cpu-idle-agent"
 
 // shutdownTimeout bounds how long Run waits for the metrics and health
 // HTTP servers to finish in-flight requests once shutdown begins. It only
-// gates the HTTP servers: the reconcile loop's own shutdown (informer
-// queue drain) is governed by ctx, not this timeout.
+// gates the HTTP servers: the reconcile and guard loops are cancelled and
+// joined separately.
 const shutdownTimeout = 10 * time.Second
 
 // GateCheckFunc matches envgate.Check's signature. Lifecycle depends on it
@@ -59,14 +58,12 @@ type GateCheckFunc func(root, kubepodsName string, uname envgate.UnameFunc) (env
 // behavior is testable without a real cluster or a real kernel underneath
 // it (see cmd/agent/main_test.go and lifecycle_test.go).
 //
-// Run performs zero cgroup writes past ctx cancellation: whatever writes
-// were already in flight when ctx was canceled either already finished or
-// observed ctx.Err() and stopped (Reconciler.Reconcile and Applier.Apply/
-// Revert both check ctx.Err() before doing anything). Run adds no rollback
-// of its own on top of that — no revert-on-shutdown hook of any kind
-// (INV-4): reverting every idle pod on every routine rolling update would
-// turn a normal deploy into a CPU-pressure incident, and it would not even
-// help on SIGKILL or an OOM kill, the other two ways this process ends.
+// Run never changes cgroup state during shutdown (INV-4), including transient
+// node-guard suppression. It cancels and joins the guard so no writes remain in
+// flight. A later process with the guard still enabled recovers the durable
+// marker before becoming ready; explicit --revert-all provides cleanup before
+// disabling the guard or permanently removing the operator. A disabled guard
+// never acts on Pod metadata, which is tenant-controlled.
 type Lifecycle struct {
 	// Client is this agent's Kubernetes API client. Required.
 	Client kubernetes.Interface
@@ -116,9 +113,9 @@ type Lifecycle struct {
 // Run executes this agent's full lifecycle: the environment gate check,
 // the metrics and health HTTP servers, and then either the full reconcile
 // loop (gate passed) or read-only degraded mode (gate failed). It blocks
-// until ctx is done, then shuts down every server and background goroutine
-// it started before returning. See the type doc comment for Run's INV-4
-// shutdown guarantee.
+// until ctx is done or any essential loop/server exits, then cancels and
+// joins every other component before returning. See the type doc comment
+// for Run's INV-4 shutdown guarantee.
 func (lc *Lifecycle) Run(ctx context.Context) error {
 	logger := lc.logger()
 
@@ -142,7 +139,8 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	lc.Health = health
 	health.SetGateResult(gateResult.Ready, string(gateResult.Reason))
 
-	eventRecorder := lc.eventRecorder()
+	eventRecorder, stopEventRecorder := lc.eventRecorder()
+	defer stopEventRecorder()
 
 	// Intent: observe.NewRecorderFromMetrics reuses the single Metrics
 	// bundle already registered on registry above instead of registering a
@@ -153,8 +151,9 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	// /metrics scrape (Gather() fails atomically across every family the
 	// instant two collide, not just the colliding one).
 	var applier Applier
+	var recorder *observe.Recorder
 	if gateResult.Ready {
-		recorder := observe.NewRecorderFromMetrics(metrics, eventRecorder, lc.Config.NodeName)
+		recorder = observe.NewRecorderFromMetrics(metrics, eventRecorder, lc.Config.NodeName)
 
 		applier = lc.Applier
 		if applier == nil {
@@ -177,6 +176,8 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("agent: informer: %w", err)
 	}
+	informer.logger = logger
+	informer.onReconcileHealth = health.SetReconcileHealthy
 
 	metricsListener, err := lc.listener(lc.MetricsListener, lc.Config.MetricsAddr)
 	if err != nil {
@@ -196,40 +197,58 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 	lc.serve(&serverWG, serverErrs, metricsServer, metricsListener, "metrics")
 	lc.serve(&serverWG, serverErrs, healthServer, healthListener, "health")
 
-	var runErr error
-	if gateResult.Ready {
-		reconciler := NewReconciler(informer.Lister(), applier, lc.Config.CgroupRoot, lc.Config.KubepodsName, gateResult.Driver, metrics, lc.Config.NodeName)
-		var nodeGuard *guard.Guard
-		if guardCfg := (guard.Config{
-			High:         lc.Config.GuardHigh,
-			Low:          lc.Config.GuardLow,
-			Period:       lc.Config.GuardPeriod,
-			FloorQuota:   lc.Config.GuardFloor,
-			Freeze:       lc.Config.GuardFreeze,
-			CgroupRoot:   lc.Config.CgroupRoot,
-			KubepodsName: lc.Config.KubepodsName,
-			Driver:       gateResult.Driver,
-			NodeName:     lc.Config.NodeName,
-		}); guardCfg.Enabled() {
-			nodeGuard = guard.New(guardCfg, informer.Lister(), eventRecorder, logger)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	runErrs := make(chan error, 1)
+	go func() {
+		if gateResult.Ready {
+			reconciler := NewReconciler(informer.Lister(), applier, lc.Config.CgroupRoot, lc.Config.KubepodsName, gateResult.Driver, metrics, lc.Config.NodeName)
+			guardCfg := guard.Config{
+				High:         lc.Config.GuardHigh,
+				Low:          lc.Config.GuardLow,
+				Period:       lc.Config.GuardPeriod,
+				FloorQuota:   lc.Config.GuardFloor,
+				CgroupRoot:   lc.Config.CgroupRoot,
+				KubepodsName: lc.Config.KubepodsName,
+				Driver:       gateResult.Driver,
+				NodeName:     lc.Config.NodeName,
+			}
+			nodeGuard := guard.New(guardCfg, lc.Client, informer.Lister(), recorder, logger)
+			nodeGuard.SetHealthReporter(health.SetGuardHealthy)
+			runErrs <- lc.runReady(runCtx, informer, reconciler, health, nodeGuard)
+			return
 		}
-		runErr = lc.runReady(ctx, informer, reconciler, health, nodeGuard)
-	} else {
-		runErr = lc.runDegraded(ctx, informer, observe.NewEventRecorder(eventRecorder))
+		runErrs <- lc.runDegraded(runCtx, informer, observe.NewEventRecorder(eventRecorder))
+	}()
+
+	// Either the control loop or either HTTP server is essential. If one
+	// exits unexpectedly, cancel and join the control loop immediately so
+	// the process can fail and be restarted instead of staying alive with a
+	// dead metrics, readiness, or reconciliation surface.
+	var runErr error
+	select {
+	case runErr = <-runErrs:
+	case serveErr := <-serverErrs:
+		runErr = serveErr
+		cancelRun()
+		if workerErr := <-runErrs; workerErr != nil && !errors.Is(workerErr, context.Canceled) {
+			runErr = errors.Join(runErr, workerErr)
+		}
 	}
+	cancelRun()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if shutdownErr := metricsServer.Shutdown(shutdownCtx); shutdownErr != nil {
-		logger.Error("agent: metrics server shutdown", "error", shutdownErr)
+		runErr = errors.Join(runErr, fmt.Errorf("agent: metrics server shutdown: %w", shutdownErr))
 	}
 	if shutdownErr := healthServer.Shutdown(shutdownCtx); shutdownErr != nil {
-		logger.Error("agent: health server shutdown", "error", shutdownErr)
+		runErr = errors.Join(runErr, fmt.Errorf("agent: health server shutdown: %w", shutdownErr))
 	}
 	serverWG.Wait()
 	close(serverErrs)
 	for serveErr := range serverErrs {
-		logger.Error("agent: http server error", "error", serveErr)
+		runErr = errors.Join(runErr, serveErr)
 	}
 
 	return runErr
@@ -238,8 +257,11 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 // runReady drives the gate-passed branch: it waits for informer's cache to
 // perform its initial sync — an idempotent full-node reconciliation, since
 // every key the initial List delivers is queued exactly like a live event
-// — marks Health synced once that completes (VC4), then blocks draining
-// the workqueue through reconciler.Reconcile until ctx is done.
+// — recovers guard-owned state when the guard is enabled, marks Health
+// synced once startup recovery completes (VC4), then blocks draining the
+// workqueue through reconciler.Reconcile until ctx is done. A disabled guard
+// skips marker recovery because Pod annotations are tenant-controlled; the
+// explicit --revert-all path remains available for deliberate cleanup.
 func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconciler *Reconciler, health *Health, nodeGuard *guard.Guard) error {
 	if !informer.Start(ctx) {
 		// Intent: Start's own doc comment says it returns false only when
@@ -250,13 +272,44 @@ func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconcile
 		// SIGTERM during startup does not make main.go exit non-zero.
 		return nil
 	}
-	health.SetSynced(true)
-	if nodeGuard != nil {
-		// The guard runs beside the reconcile loop and stops with the same
-		// ctx; like the reconciler it performs no writes past cancellation.
-		go nodeGuard.Run(ctx)
+	if nodeGuard.Enabled() {
+		if err := nodeGuard.Recover(ctx); err != nil {
+			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+				return nil
+			}
+			return fmt.Errorf("agent: recover node guard state: %w", err)
+		}
 	}
-	return informer.Run(ctx, reconciler.Reconcile)
+	health.SetSynced(true)
+
+	if !nodeGuard.Enabled() {
+		return informer.Run(ctx, reconciler.Reconcile)
+	}
+
+	loopCtx, cancelLoops := context.WithCancel(ctx)
+	defer cancelLoops()
+	type loopResult struct {
+		name string
+		err  error
+	}
+	loopResults := make(chan loopResult, 2)
+	go func() {
+		loopResults <- loopResult{name: "guard", err: nodeGuard.Run(loopCtx)}
+	}()
+	go func() {
+		loopResults <- loopResult{name: "informer", err: informer.Run(loopCtx, reconciler.Reconcile)}
+	}()
+
+	first := <-loopResults
+	cancelLoops()
+	second := <-loopResults
+	var loopErrs []error
+	for _, result := range []loopResult{first, second} {
+		if result.err != nil {
+			loopErrs = append(loopErrs, fmt.Errorf("agent: %s loop: %w", result.name, result.err))
+		}
+	}
+	return errors.Join(loopErrs...)
 }
 
 // runDegraded drives the gate-failed branch (INV-5: no Applier exists on
@@ -267,42 +320,61 @@ func (lc *Lifecycle) runReady(ctx context.Context, informer *Informer, reconcile
 // EnvironmentUnsupported Event and never repeats it for that pod's UID —
 // without the dedup, the informer's periodic full resync would replay the
 // same Add-shaped delivery every resync period and spam the same Event
-// forever.
+// forever. A key-to-UID index removes dedup state on Delete/recreate in O(1)
+// per event; this degraded path never scans the full informer cache once per
+// queued Pod.
 func (lc *Lifecycle) runDegraded(ctx context.Context, informer *Informer, events *observe.EventRecorder) error {
-	var mu sync.Mutex
-	notified := make(map[types.UID]bool)
+	notified := make(map[types.UID]string)
+	uidsByKey := make(map[string]types.UID)
 
 	reconcile := func(_ context.Context, key string, _ bool) error {
 		namespace, name, err := cache.SplitMetaNamespaceKey(key)
 		if err != nil {
-			return nil
+			return fmt.Errorf("agent: degraded: split key %q: %w", key, err)
 		}
 		pod, err := informer.Lister().Pods(namespace).Get(name)
 		if err != nil {
-			// Intent: not found (deleted between enqueue and this call) or
-			// any other lister error — there is nothing actionable to
-			// notify about either way, and this branch must never treat a
-			// lookup failure as a reason to retry (retrying here could
-			// only ever re-attempt the same no-op).
+			if apierrors.IsNotFound(err) {
+				if uid, ok := uidsByKey[key]; ok {
+					delete(notified, uid)
+					delete(uidsByKey, key)
+				}
+				return nil
+			}
+			return fmt.Errorf("agent: degraded: get pod %s: %w", key, err)
+		}
+		if previousUID, ok := uidsByKey[key]; ok && previousUID != pod.UID {
+			delete(notified, previousUID)
+		}
+		uidsByKey[key] = pod.UID
+
+		desired, notes := tier.Desired(pod)
+		unsupported := desired.IdleRequested || desired.BurstRequested
+		signature := noteSignature(notes)
+		if unsupported {
+			signature += string(observe.TierApplyReasonEnvironmentUnsupported) + "\x00"
+		}
+
+		previous, seen := notified[pod.UID]
+		if signature == "" {
+			delete(notified, pod.UID)
+		} else {
+			notified[pod.UID] = signature
+		}
+		if signature == "" || (seen && previous == signature) {
 			return nil
 		}
 
-		desired, _ := tier.Desired(pod)
-		if !desired.IdleRequested && !desired.BurstRequested {
-			return nil
+		for _, note := range notes {
+			if note.Code == tier.NoteUnknownTierValue {
+				events.TierValueUnknown(pod, "%s", note.Message)
+			}
 		}
-
-		mu.Lock()
-		alreadyNotified := notified[pod.UID]
-		notified[pod.UID] = true
-		mu.Unlock()
-		if alreadyNotified {
-			return nil
+		if unsupported {
+			events.EnvironmentUnsupported(pod,
+				"node %s does not support cpu-idle-operator cgroup controls; tier annotations on this pod cannot take effect",
+				lc.Config.NodeName)
 		}
-
-		events.EnvironmentUnsupported(pod,
-			"node %s does not support the CPU idle tier; tier annotations on this pod cannot take effect",
-			lc.Config.NodeName)
 		return nil
 	}
 
@@ -336,14 +408,15 @@ func (lc *Lifecycle) logger() *slog.Logger {
 // eventRecorder returns lc.EventRecorder, defaulting to a broadcaster
 // wired to Client's event sink — production's real path, since this
 // operator's Events belong on the API server, not only in this process's
-// own logs.
-func (lc *Lifecycle) eventRecorder() record.EventRecorder {
+// own logs. The returned stop function joins the default broadcaster; it
+// is a no-op for an injected recorder owned by the caller.
+func (lc *Lifecycle) eventRecorder() (record.EventRecorder, func()) {
 	if lc.EventRecorder != nil {
-		return lc.EventRecorder
+		return lc.EventRecorder, func() {}
 	}
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: lc.Client.CoreV1().Events("")})
-	return broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: componentName, Host: lc.Config.NodeName})
+	return broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: componentName, Host: lc.Config.NodeName}), broadcaster.Shutdown
 }
 
 // listener returns injected unchanged, or listens on addr otherwise.
@@ -371,21 +444,14 @@ func (lc *Lifecycle) serve(wg *sync.WaitGroup, errs chan<- error, server *http.S
 	}()
 }
 
-// newMetricsServer builds the /metrics HTTP server, scraping the union of
-// gatherers (see Run's comment on why Applier's metrics live on a second
-// registry).
+// newMetricsServer builds the /metrics HTTP server from the process's
+// single registry (wrapped as Gatherers for promhttp's Gatherer API).
 func newMetricsServer(gatherers prometheus.Gatherers) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{}))
-	return &http.Server{Handler: mux}
-}
-
-// realUname is envgate.UnameFunc's production implementation: the actual
-// uname(2) syscall, reporting this host's running kernel release.
-func realUname() (string, error) {
-	var uts unix.Utsname
-	if err := unix.Uname(&uts); err != nil {
-		return "", fmt.Errorf("agent: uname: %w", err)
+	return &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
-	return unix.ByteSliceToString(uts.Release[:]), nil
 }

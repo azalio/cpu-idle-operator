@@ -3,9 +3,10 @@
 # check-readme-keys.sh checks two things about README.md for CI:
 #
 #   test_vc2_annotation_keys_match_source: every "cpu.azalio.net/..."
-#   annotation key mentioned in README.md is exactly one of the keys built
-#   from internal/annotations/keys.go, and both of those keys actually
-#   appear in README.md. This is a drift check, not a presence check: a
+#   public annotation key mentioned in README.md is exactly one of the two
+#   user-facing keys built from internal/annotations/keys.go, and both keys
+#   actually appear in README.md. Internal state keys are intentionally not
+#   documented as a workload interface. This is a drift check: a
 #   typo'd key, a stale key left behind after a rename, or a missing key
 #   all fail it.
 #
@@ -99,11 +100,14 @@ test_vc2_annotation_keys_match_source() {
   while IFS= read -r key; do
     [[ -n "${key}" ]] || continue
     known=0
-    if [[ "${key}" == "${tier_key}" ]]; then
+    # kubectl annotate removes an annotation by appending "-" to its key.
+    # README's uninstall recipe therefore legitimately contains both
+    # canonical keys in that command form as well as in ordinary prose.
+    if [[ "${key}" == "${tier_key}" || "${key}" == "${tier_key}-" ]]; then
       known=1
       found_tier=1
     fi
-    if [[ "${key}" == "${burst_key}" ]]; then
+    if [[ "${key}" == "${burst_key}" || "${key}" == "${burst_key}-" ]]; then
       known=1
       found_burst=1
     fi
