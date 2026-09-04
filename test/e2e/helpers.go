@@ -372,11 +372,41 @@ func waitForAgentPodReady(t *testing.T, ctx context.Context, clientset *kubernet
 // Kubernetes is still replacing it with the kind-specific configuration.
 func waitForAgentRollout(t *testing.T) {
 	t.Helper()
-	runCmd(t, "kubectl", kubectlArgs(
+	args := kubectlArgs(
 		"-n", agentNamespace,
 		"rollout", "status", "daemonset/"+agentDaemonSet,
 		"--timeout="+podReadyTimeout.String(),
-	)...)
+	)
+	cmd := exec.Command("kubectl", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("kubectl %s: %v\n%s\nagent diagnostics:\n%s", strings.Join(args, " "), err, out, agentDiagnostics())
+	}
+}
+
+// agentDiagnostics captures enough cluster state to distinguish an image
+// startup problem, an environment-gate rejection, and a reconcile-health
+// failure when the DaemonSet does not become Ready. E2E infrastructure is
+// deleted after every CI run, so deferring this evidence to a later command
+// would lose the only copy of the failing pod's status and logs.
+func agentDiagnostics() string {
+	commands := [][]string{
+		kubectlArgs("-n", agentNamespace, "get", "daemonset/"+agentDaemonSet, "-o", "wide"),
+		kubectlArgs("-n", agentNamespace, "get", "pods", "-l", agentLabelSelector, "-o", "wide"),
+		kubectlArgs("-n", agentNamespace, "describe", "pods", "-l", agentLabelSelector),
+		kubectlArgs("-n", agentNamespace, "logs", "-l", agentLabelSelector, "--all-containers=true", "--prefix=true", "--tail=200"),
+	}
+	var diagnostics strings.Builder
+	for _, args := range commands {
+		_, _ = fmt.Fprintf(&diagnostics, "$ kubectl %s\n", strings.Join(args, " "))
+		cmd := exec.Command("kubectl", args...)
+		out, err := cmd.CombinedOutput()
+		diagnostics.Write(out)
+		if err != nil {
+			_, _ = fmt.Fprintf(&diagnostics, "command failed: %v\n", err)
+		}
+	}
+	return diagnostics.String()
 }
 
 // applyConfigBase applies config/base (namespace, RBAC, DaemonSet) with
