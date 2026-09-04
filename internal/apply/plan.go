@@ -53,9 +53,9 @@ type Write struct {
 // single-knob and mixed-direction cases the contract does not name.
 //
 // cpu.max.burst's target value is desired.BurstActive (tier.Desired's
-// spec-level prediction: every container declares a positive CPU limit)
-// narrowed by actual.HasQuota, the fact the pod cgroup's cpu.max actually
-// reports right now: a burst write is only ever planned when both agree,
+// spec-level prediction of a pod-level quota) narrowed by actual.HasQuota,
+// the fact the pod cgroup's cpu.max actually reports right now: a burst
+// write is only ever planned when both agree,
 // since a spec that predicts a quota does not guarantee kubelet has set
 // one yet. actual.Quota supplies the value — the burst annotation's own
 // value is never parsed (SC-2).

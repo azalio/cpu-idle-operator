@@ -2,6 +2,7 @@ package cgroup
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,6 +32,18 @@ func TestReadKnobMissingDirReturnsCgroupGone(t *testing.T) {
 	_, err := ReadKnob(dir, "cpu.idle")
 	if !errors.Is(err, ErrCgroupGone) {
 		t.Errorf("ReadKnob error = %v, want ErrCgroupGone", err)
+	}
+}
+
+func TestReadKnobMissingFileReturnsKnobUnavailable(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := ReadKnob(dir, "cpu.idle")
+	if !errors.Is(err, ErrKnobUnavailable) {
+		t.Fatalf("ReadKnob error = %v, want ErrKnobUnavailable while pod cgroup still exists", err)
+	}
+	if errors.Is(err, ErrCgroupGone) {
+		t.Fatalf("ReadKnob error = %v, must not claim the existing cgroup is gone", err)
 	}
 }
 
@@ -71,6 +84,22 @@ func TestWriteKnobMissingDirReturnsCgroupGone(t *testing.T) {
 	}
 }
 
+func TestWriteKnobMissingFileReturnsKnobUnavailable(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubepods", "pod123")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.idle", "1")
+	if !errors.Is(err, ErrKnobUnavailable) {
+		t.Fatalf("WriteKnob error = %v, want ErrKnobUnavailable", err)
+	}
+	if errors.Is(err, ErrCgroupGone) {
+		t.Fatalf("WriteKnob error = %v, must not claim the existing cgroup is gone", err)
+	}
+}
+
 // fakeKnobWriter lets tests control Write and Close independently, which a
 // real filesystem cannot reliably do: forcing a real cgroup knob file to
 // fail exactly on Close (and succeed on Write) requires a live kernel
@@ -78,11 +107,15 @@ func TestWriteKnobMissingDirReturnsCgroupGone(t *testing.T) {
 type fakeKnobWriter struct {
 	writeErr error
 	closeErr error
+	writeN   *int
 }
 
 func (f *fakeKnobWriter) Write(p []byte) (int, error) {
 	if f.writeErr != nil {
 		return 0, f.writeErr
+	}
+	if f.writeN != nil {
+		return *f.writeN, nil
 	}
 	return len(p), nil
 }
@@ -143,6 +176,37 @@ func TestVC2CloseErrorTakesPriorityOverWriteError(t *testing.T) {
 	}
 	if errors.Is(err, writeErr) {
 		t.Errorf("write error leaked into result even though Close also failed: %v", err)
+	}
+}
+
+func TestWriteKnobRejectsShortWrite(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubepods", "pod550e8400-e29b-41d4-a716-446655440000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	zero := 0
+	withFakeKnobWriter(t, &fakeKnobWriter{writeN: &zero})
+	if err := WriteKnob(root, DefaultKubepodsName, dir, "cpu.idle", "1"); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("WriteKnob() error = %v, want io.ErrShortWrite", err)
+	}
+}
+
+func TestKnobNameAllowlistRejectsTraversalAndNonCPUFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubepods", "pod550e8400-e29b-41d4-a716-446655440000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for _, name := range []string{"../memory.max", "memory.max", "cgroup.freeze", "cpu.stat"} {
+		t.Run(name, func(t *testing.T) {
+			if err := WriteKnob(root, DefaultKubepodsName, dir, name, "1"); !errors.Is(err, ErrKnobNotAllowed) {
+				t.Fatalf("WriteKnob(%q) error = %v, want ErrKnobNotAllowed", name, err)
+			}
+			if _, err := ReadKnob(dir, name); !errors.Is(err, ErrKnobNotAllowed) {
+				t.Fatalf("ReadKnob(%q) error = %v, want ErrKnobNotAllowed", name, err)
+			}
+		})
 	}
 }
 

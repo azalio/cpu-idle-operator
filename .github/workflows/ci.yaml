@@ -6,12 +6,10 @@ on:
   push:
     branches: [main]
 
-# internal/cgroup (and everything that imports it, which is most of this
-# module — see internal/cgroup's own README note repeated in the Makefile)
-# only compiles under GOOS=linux: it depends on Linux-only cgroup v2
-# syscalls. Every job below therefore runs on ubuntu-latest, never on a
-# matrix that includes macOS or Windows — this is not a portability gap to
-# fix, it is this agent's actual deployment target (a Linux DaemonSet).
+# Production and e2e jobs run on Linux because the shipped agent is a Linux
+# DaemonSet and its runtime contract is cgroup v2. Core packages also compile
+# and unit-test on developer platforms; the Linux jobs remain authoritative
+# for the actual deployment target.
 env:
   GOTOOLCHAIN: local
 
@@ -26,6 +24,9 @@ jobs:
           go-version-file: go.mod
       - run: go build ./...
       - run: go vet ./...
+      - name: Vet example benchwork module
+        working-directory: example/benchwork
+        run: go vet ./...
 
   lint:
     name: lint
@@ -56,6 +57,9 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test ./... -v -count=1
+      - name: Test example benchwork module
+        working-directory: example/benchwork
+        run: go test ./... -v -count=1
 
   check-manifests:
     name: check-manifests
@@ -164,8 +168,9 @@ jobs:
       # This DOES block merge: the DaemonSet built from config/base must
       # come up and, patched only with kind's own --cgroup-root/
       # --kubepods-name (never config/base's own defaults, which stay
-      # correct for a real production kubelet), actually apply and revert
-      # the idle tier for real (AC-10) -- see e2e_test.go's own doc comment.
+      # correct for a real production kubelet), actually apply the idle tier,
+      # repair out-of-band drift on resync, and revert it for real (AC-10) --
+      # see e2e_test.go's own doc comment.
       - name: Run kind e2e scenario
         run: go test -tags e2e -v -run '^TestKindApplyAndRevert$' ./test/e2e/...
 

@@ -4,6 +4,7 @@ package envgate
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -50,9 +51,9 @@ func buildV2Root(t *testing.T, driver cgroup.Driver, kubepodsName string) string
 
 	switch driver {
 	case cgroup.DriverSystemd:
-		mkdir(t, filepath.Join(root, kubepodsName+".slice"))
+		seedRequiredKnobs(t, filepath.Join(root, kubepodsName+".slice"))
 	case cgroup.DriverCgroupfs:
-		mkdir(t, filepath.Join(root, kubepodsName))
+		seedRequiredKnobs(t, filepath.Join(root, kubepodsName))
 	}
 
 	original := statfsType
@@ -65,6 +66,18 @@ func buildV2Root(t *testing.T, driver cgroup.Driver, kubepodsName string) string
 	t.Cleanup(func() { statfsType = original })
 
 	return root
+}
+
+func seedRequiredKnobs(t *testing.T, dir string) {
+	t.Helper()
+	for name, value := range map[string]string{
+		"cpu.idle":      "0\n",
+		"cpu.weight":    "100\n",
+		"cpu.max":       "max 100000\n",
+		"cpu.max.burst": "0\n",
+	} {
+		writeFile(t, filepath.Join(dir, name), value)
+	}
 }
 
 // fixedUname returns a UnameFunc that always reports release, for tests
@@ -154,6 +167,32 @@ func TestVC1CgroupVersionGate(t *testing.T) {
 			t.Errorf("Reason = %v, want %v", result.Reason, ReasonCgroupHybrid)
 		}
 	})
+}
+
+func TestCheckFailsClosedWhenRequiredCPUKnobIsMissing(t *testing.T) {
+	for _, driver := range []cgroup.Driver{cgroup.DriverSystemd, cgroup.DriverCgroupfs} {
+		t.Run(string(driver), func(t *testing.T) {
+			root := buildV2Root(t, driver, cgroup.DefaultKubepodsName)
+			dir := filepath.Join(root, cgroup.DefaultKubepodsName)
+			if driver == cgroup.DriverSystemd {
+				dir += ".slice"
+			}
+			if err := os.Remove(filepath.Join(dir, "cpu.max.burst")); err != nil {
+				t.Fatalf("remove required knob: %v", err)
+			}
+
+			result, err := Check(root, cgroup.DefaultKubepodsName, fixedUname("6.17.0"))
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if result.Ready || result.Reason != ReasonRequiredKnobMissing {
+				t.Fatalf("Check() = %+v, want not ready with %q", result, ReasonRequiredKnobMissing)
+			}
+			if result.Driver != driver {
+				t.Fatalf("Driver = %q, want detected driver %q", result.Driver, driver)
+			}
+		})
+	}
 }
 
 // TestDetectDriverHonorsConfiguredKubepodsName covers the fix this subtask
@@ -261,6 +300,32 @@ func TestVC2KernelFloor(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnknownKernelFailsClosedWithoutCrashing(t *testing.T) {
+	t.Run("unparseable release", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, cgroup.DefaultKubepodsName)
+		result, err := Check(root, cgroup.DefaultKubepodsName, fixedUname("vendor-kernel"))
+		if err != nil {
+			t.Fatalf("Check() error = %v, want a classified gate result", err)
+		}
+		if result.Ready || result.Reason != ReasonKernelUnknown {
+			t.Fatalf("Check() = %+v, want not ready with %q", result, ReasonKernelUnknown)
+		}
+	})
+
+	t.Run("uname failure", func(t *testing.T) {
+		root := buildV2Root(t, cgroup.DriverSystemd, cgroup.DefaultKubepodsName)
+		result, err := Check(root, cgroup.DefaultKubepodsName, func() (string, error) {
+			return "", errors.New("uname unavailable")
+		})
+		if err != nil {
+			t.Fatalf("Check() error = %v, want a classified gate result", err)
+		}
+		if result.Ready || result.Reason != ReasonKernelUnknown {
+			t.Fatalf("Check() = %+v, want not ready with %q", result, ReasonKernelUnknown)
+		}
+	})
 }
 
 // --- VC3: zero writes on a failed gate (INV-5) -----------------------------

@@ -4,35 +4,48 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
+)
+
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpIdleTimeout       = 60 * time.Second
 )
 
 // reasonCacheNotSynced is Health's readiness reason when the environment
 // gate passed but the informer's cache has not completed its initial sync
 // yet. It deliberately does not reuse any envgate.Reason value: this
 // condition has nothing to do with the environment gate's own decision.
-const reasonCacheNotSynced = "cache_not_synced"
+const (
+	reasonCacheNotSynced  = "cache_not_synced"
+	reasonReconcileFailed = "reconcile_failed"
+	reasonGuardFailed     = "guard_failed"
+)
 
 // Health tracks this agent process's combined readiness decision and
-// serves it over HTTP. Readiness requires two conditions to both hold
-// (VC4): the environment gate passed, and the informer's cache has
-// completed its initial sync. A caller that reported 200 before both held
-// would tell Kubernetes this pod can already reconcile pods it has not
-// even listed yet — worse, on a failed gate, it would claim the node is
-// fine when INV-5 says the opposite. The gate's own outcome is set once at
-// startup and never changes for this process's lifetime; the sync flag
-// starts false and is set at most once, when the informer's cache finishes
-// its initial list.
+// serves it over HTTP. Readiness requires the environment gate to pass,
+// the informer cache to complete its initial sync, and both reconcile and
+// enabled guard loops to have no outstanding failure. A caller that
+// reported 200 before the first two held would tell Kubernetes this pod can
+// already reconcile pods it has not even listed yet — worse, on a failed
+// gate, it would claim the node is fine when INV-5 says the opposite. The
+// gate's outcome is fixed at startup; the two loop-health conditions can
+// recover after their failing key or tick succeeds.
 type Health struct {
-	mu         sync.RWMutex
-	gateReady  bool
-	gateReason string
-	synced     bool
+	mu               sync.RWMutex
+	gateReady        bool
+	gateReason       string
+	synced           bool
+	reconcileHealthy bool
+	guardHealthy     bool
 }
 
 // NewHealth returns a Health that reports not-ready until both
-// SetGateResult(true, ...) and SetSynced(true) have been called.
+// SetGateResult(true, ...) and SetSynced(true) have been called. Reconcile
+// and guard health start true and are driven false only by an observed
+// loop failure.
 func NewHealth() *Health {
-	return &Health{gateReason: reasonCacheNotSynced}
+	return &Health{gateReason: reasonCacheNotSynced, reconcileHealthy: true, guardHealthy: true}
 }
 
 // SetGateResult records the environment gate's decision (envgate.Check):
@@ -53,6 +66,24 @@ func (h *Health) SetSynced(synced bool) {
 	h.synced = synced
 }
 
+// SetReconcileHealthy records whether every currently known pod reconcile
+// key is healthy. A failed key keeps readiness false until that same key
+// succeeds (or disappears), even if unrelated pods continue reconciling.
+func (h *Health) SetReconcileHealthy(healthy bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.reconcileHealthy = healthy
+}
+
+// SetGuardHealthy records whether the most recent enabled node-guard tick
+// completed all reads, ownership updates, and cgroup convergence. A later
+// successful tick clears the failure.
+func (h *Health) SetGuardHealthy(healthy bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.guardHealthy = healthy
+}
+
 // Ready reports the current combined readiness decision and, when not
 // ready, the reason to surface to a caller. The gate's reason takes
 // priority over "cache not synced yet": a failed gate is the longer-lived,
@@ -67,6 +98,12 @@ func (h *Health) Ready() (ready bool, reason string) {
 	}
 	if !h.synced {
 		return false, reasonCacheNotSynced
+	}
+	if !h.reconcileHealthy {
+		return false, reasonReconcileFailed
+	}
+	if !h.guardHealthy {
+		return false, reasonGuardFailed
 	}
 	return true, ""
 }
@@ -116,5 +153,10 @@ func (h *Health) NewServer(addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.LivenessHandler())
 	mux.HandleFunc("/readyz", h.ReadinessHandler())
-	return &http.Server{Addr: addr, Handler: mux}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		IdleTimeout:       httpIdleTimeout,
+	}
 }

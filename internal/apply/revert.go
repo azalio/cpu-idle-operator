@@ -52,12 +52,17 @@ func (a *Applier) Revert(ctx context.Context, pod *corev1.Pod, state Snapshot) e
 		return fmt.Errorf("apply: revert: pod cgroup path: %w", err)
 	}
 
-	for _, write := range revertPlan(pod, state) {
+	for _, write := range a.buildPlan(pod, tier.State{}, state) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		writeErr := a.writer.WriteKnob(a.cgroupRoot, a.kubepodsName, dir, write.Knob, write.Value)
 		switch {
 		case writeErr == nil:
+			a.recordCompletedWrite(pod.UID, write)
 			a.recorder.Reverted(pod, write.Knob, string(observe.TierApplyResultReverted), string(observe.TierApplyReasonOK))
 		case errors.Is(writeErr, cgroup.ErrCgroupGone):
+			a.forgetPendingRestore(pod.UID)
 			// Intent: the pod raced to deletion mid-plan, same silent-return
 			// contract Apply uses for the identical race.
 			return nil
@@ -65,9 +70,12 @@ func (a *Applier) Revert(ctx context.Context, pod *corev1.Pod, state Snapshot) e
 			// Intent: this is the measured failure mode this function is
 			// built around. When it lands on the cpu.idle write, the loop
 			// stops here and the plan's next entry (cpu.weight, per
-			// revertPlan) is never attempted — INV-2 holds structurally,
+			// buildPlan) is never attempted — INV-2 holds structurally,
 			// not by a special case.
 			a.recorder.Rejected(pod, write.Knob, string(observe.TierApplyResultRejected), string(observe.TierApplyReasonEINVAL))
+			if write.Knob == KnobCPUWeight {
+				return fmt.Errorf("apply: revert: restore %s: %w", write.Knob, writeErr)
+			}
 			return nil
 		case errors.Is(writeErr, cgroup.ErrNotPodCgroup):
 			a.recorder.Rejected(pod, write.Knob, string(observe.TierApplyResultRejected), string(observe.TierApplyReasonNotPodCgroup))
@@ -78,19 +86,4 @@ func (a *Applier) Revert(ctx context.Context, pod *corev1.Pod, state Snapshot) e
 		}
 	}
 	return nil
-}
-
-// revertPlan builds the ordered writes Revert executes to clear state's
-// active tiers from pod's cgroup. desired is always the fully-reverted
-// tier.State{}, so BuildPlan (ST-007) yields exactly INV-7's [cpu.idle,
-// cpu.weight, cpu.max.burst] sequence when cpu.idle needs clearing, a
-// one-element subset of [cpu.idle, cpu.max.burst] when only one of the two
-// tiers is actually active in state, or the weight-less pair when
-// cpu.max.burst alone needs clearing. BuildPlan itself decides whether and
-// where cpu.weight belongs (plan.go) — this function only supplies
-// restoreWeight, computed from pod's spec as Revert's caller observes it
-// right now, never a value remembered from when the pod entered idle
-// (AC-15).
-func revertPlan(pod *corev1.Pod, state Snapshot) []Write {
-	return BuildPlan(tier.State{}, state, qos.RestoreWeight(pod.Spec))
 }

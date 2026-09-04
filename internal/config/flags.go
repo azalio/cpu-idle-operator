@@ -6,7 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -62,12 +66,8 @@ type Config struct {
 	GuardLow float64
 	// GuardPeriod is the guard's sampling interval.
 	GuardPeriod time.Duration
-	// GuardFloor is the cpu.max value written while suppressed in
-	// throttle mode.
+	// GuardFloor is the cpu.max value written while suppressed.
 	GuardFloor string
-	// GuardFreeze selects freeze-mode suppression (cgroup.freeze) instead
-	// of cpu.max throttling.
-	GuardFreeze bool
 }
 
 // ParseFlags parses argv (excluding the program name) into a Config,
@@ -88,24 +88,43 @@ func ParseFlags(argv []string) (Config, error) {
 	guardHigh := fs.Float64("guard-high", 0, "node guard: non-idle CPU utilization fraction above which idle-tier pods are suppressed (0 disables the guard)")
 	guardLow := fs.Float64("guard-low", defaultGuardLow, "node guard: fraction below which suppression is lifted")
 	guardPeriod := fs.Duration("guard-period", defaultGuardPeriod, "node guard: sampling interval")
-	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods (throttle mode)")
-	guardFreeze := fs.Bool("guard-freeze", true, "node guard: suppress via cgroup.freeze instead of cpu.max throttling")
+	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods")
 
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, err
+	}
+	if fs.NArg() != 0 {
+		return Config{}, fmt.Errorf("unexpected positional arguments: %q", fs.Args())
 	}
 
 	if *nodeName == "" {
 		return Config{}, ErrEmptyNodeName
 	}
+	if !filepath.IsAbs(*cgroupRoot) {
+		return Config{}, fmt.Errorf("--cgroup-root must be an absolute path, got %q", *cgroupRoot)
+	}
+	if *kubepodsName == "" || *kubepodsName == "." || *kubepodsName == ".." || strings.ContainsAny(*kubepodsName, `/\\`) {
+		return Config{}, fmt.Errorf("--kubepods-name must be one path component, got %q", *kubepodsName)
+	}
+	if *resyncPeriod <= 0 {
+		return Config{}, fmt.Errorf("--resync-period must be positive, got %v", *resyncPeriod)
+	}
 
-	if *guardHigh > 0 {
-		if *guardHigh > 1 {
-			return Config{}, fmt.Errorf("--guard-high must be in (0, 1], got %v", *guardHigh)
-		}
-		if *guardLow <= 0 || *guardLow >= *guardHigh {
-			return Config{}, fmt.Errorf("--guard-low must be in (0, --guard-high), got %v", *guardLow)
-		}
+	if math.IsNaN(*guardHigh) || math.IsInf(*guardHigh, 0) || *guardHigh < 0 || *guardHigh > 1 {
+		return Config{}, fmt.Errorf("--guard-high must be 0 (disabled) or a finite value in (0, 1], got %v", *guardHigh)
+	}
+	if math.IsNaN(*guardLow) || math.IsInf(*guardLow, 0) || *guardLow <= 0 || *guardLow > 1 {
+		return Config{}, fmt.Errorf("--guard-low must be a finite value in (0, 1], got %v", *guardLow)
+	}
+	if *guardHigh > 0 && *guardLow >= *guardHigh {
+		return Config{}, fmt.Errorf("--guard-low must be below --guard-high, got low=%v high=%v", *guardLow, *guardHigh)
+	}
+	if *guardPeriod <= 0 {
+		return Config{}, fmt.Errorf("--guard-period must be positive, got %v", *guardPeriod)
+	}
+	normalizedGuardFloor, err := normalizeGuardFloor(*guardFloor)
+	if err != nil {
+		return Config{}, fmt.Errorf("--guard-floor: %w", err)
 	}
 
 	return Config{
@@ -119,7 +138,22 @@ func ParseFlags(argv []string) (Config, error) {
 		GuardHigh:    *guardHigh,
 		GuardLow:     *guardLow,
 		GuardPeriod:  *guardPeriod,
-		GuardFloor:   *guardFloor,
-		GuardFreeze:  *guardFreeze,
+		GuardFloor:   normalizedGuardFloor,
 	}, nil
+}
+
+func normalizeGuardFloor(value string) (string, error) {
+	fields := strings.Fields(value)
+	if len(fields) != 2 {
+		return "", fmt.Errorf("must be '<quota> <period>' in microseconds, got %q", value)
+	}
+	quota, err := strconv.ParseUint(fields[0], 10, 64)
+	if err != nil || quota < 1000 {
+		return "", fmt.Errorf("quota must be an integer of at least 1000 microseconds, got %q", fields[0])
+	}
+	period, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil || period < 1000 || period > 1_000_000 {
+		return "", fmt.Errorf("period must be an integer in [1000, 1000000] microseconds, got %q", fields[1])
+	}
+	return strconv.FormatUint(quota, 10) + " " + strconv.FormatUint(period, 10), nil
 }

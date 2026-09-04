@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -40,18 +41,35 @@ import (
 // apply.Applier is exercised end to end by TestVC1AnnotatedPodGetsIdle and
 // TestVC2LivePodAnnotationAddAndRemove instead.
 type fakeApplier struct {
-	applyCalls  int
-	revertCalls int
+	applyCalls         int
+	revertCalls        int
+	applyErrors        []error
+	applyReportNotices []bool
+	pendingRepair      bool
+	forgotUIDs         []types.UID
 }
 
-func (f *fakeApplier) Apply(context.Context, *corev1.Pod) error {
+func (f *fakeApplier) Apply(_ context.Context, _ *corev1.Pod, reportNotices bool) error {
 	f.applyCalls++
+	f.applyReportNotices = append(f.applyReportNotices, reportNotices)
+	if len(f.applyErrors) >= f.applyCalls {
+		return f.applyErrors[f.applyCalls-1]
+	}
 	return nil
 }
 
 func (f *fakeApplier) Revert(context.Context, *corev1.Pod, apply.Snapshot) error {
 	f.revertCalls++
+	f.pendingRepair = false
 	return nil
+}
+
+func (f *fakeApplier) NeedsWeightRepair(*corev1.Pod, apply.Snapshot) bool {
+	return f.pendingRepair
+}
+
+func (f *fakeApplier) ForgetPod(uid types.UID) {
+	f.forgotUIDs = append(f.forgotUIDs, uid)
 }
 
 // testPod builds a minimal single-container Burstable-shaped pod (a
@@ -140,6 +158,109 @@ func waitForKnobContent(t *testing.T, dir, name, want string, timeout time.Durat
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("%s content did not become %q within %s (last content = %q, last read error = %v)", name, want, timeout, lastGot, lastErr)
+}
+
+func TestReconcileRetriesWhenRunningPodCgroupIsMissing(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	pod.Status.Phase = corev1.PodRunning
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	fakeApply := &fakeApplier{}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), fakeApply, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+
+	err := reconciler.Reconcile(context.Background(), pod.Namespace+"/"+pod.Name, false)
+	if !errors.Is(err, cgroup.ErrCgroupGone) {
+		t.Fatalf("Reconcile error = %v, want ErrCgroupGone retry for a Running pod", err)
+	}
+	if fakeApply.applyCalls != 0 || fakeApply.revertCalls != 0 {
+		t.Fatalf("applier calls = apply:%d revert:%d, want none without a cgroup", fakeApply.applyCalls, fakeApply.revertCalls)
+	}
+}
+
+func TestReconcileSkipsMirrorPodWithoutResolvedStaticUID(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("cccccccc-1111-2222-3333-dddddddddddd", "500m", map[string]string{
+		corev1.MirrorPodAnnotationKey: "static-pod-config-hash",
+		annotations.TierKey:           annotations.TierValueIdle,
+	})
+	pod.Status.Phase = corev1.PodRunning
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	fakeApply := &fakeApplier{}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), fakeApply, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+
+	if err := reconciler.Reconcile(context.Background(), pod.Namespace+"/"+pod.Name, false); err != nil {
+		t.Fatalf("Reconcile mirror pod error = %v, want nil because its API UID cannot identify the static-pod cgroup", err)
+	}
+	if fakeApply.applyCalls != 0 || fakeApply.revertCalls != 0 {
+		t.Fatalf("applier calls = apply:%d revert:%d, want none for a mirror pod", fakeApply.applyCalls, fakeApply.revertCalls)
+	}
+}
+
+func TestPodsInTierRefreshSkipsMirrorPodWithoutResolvedStaticUID(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("dddddddd-1111-2222-3333-eeeeeeeeeeee", "500m", map[string]string{
+		corev1.MirrorPodAnnotationKey: "static-pod-config-hash",
+	})
+	pod.Status.Phase = corev1.PodRunning
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	registry := prometheus.NewRegistry()
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), &fakeApplier{}, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(registry), "node-a",
+	)
+
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier mirror pod error = %v, want nil because mirror pods cannot be sampled by API UID", err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	if got := podsInTierSamples(t, families); len(got) != 0 {
+		t.Fatalf("cpu_pods_in_tier samples = %v, want none for a mirror pod", got)
+	}
+}
+
+func TestReconcileIgnoresMissingCgroupBeforePodIsRunning(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("bbbbbbbb-1111-2222-3333-cccccccccccc", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	pod.Status.Phase = corev1.PodPending
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	fakeApply := &fakeApplier{}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), fakeApply, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+
+	if err := reconciler.Reconcile(context.Background(), pod.Namespace+"/"+pod.Name, false); err != nil {
+		t.Fatalf("Reconcile pending pod error = %v, want nil while kubelet has not created its cgroup", err)
+	}
 }
 
 // TestVC1AnnotatedPodGetsIdle covers VC1 [AC-1]: a pod carrying the idle
@@ -320,6 +441,37 @@ func TestVC3ReconcileIsIdempotent(t *testing.T) {
 	})
 }
 
+func TestReconcileRetriesOwnedInterruptedWeightRestore(t *testing.T) {
+	root := t.TempDir()
+	const uid = "33333333-4444-4444-4444-444444444444"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "100", "max 100000", "0")
+
+	pod := testPod(uid, "", nil)
+	pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("500m"),
+	}
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+
+	applierFake := &fakeApplier{pendingRepair: true}
+	metrics := observe.NewMetrics(prometheus.NewRegistry())
+	reconciler := NewReconciler(corelisters.NewPodLister(indexer), applierFake, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+	key, err := cache.MetaNamespaceKeyFunc(pod)
+	if err != nil {
+		t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+	}
+
+	if err := reconciler.Reconcile(context.Background(), key, true); err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if applierFake.revertCalls != 1 || applierFake.applyCalls != 0 {
+		t.Fatalf("applier calls = {apply: %d, revert: %d}, want one Revert recovery", applierFake.applyCalls, applierFake.revertCalls)
+	}
+}
+
 // TestSeamNotesReachUserThroughReconciler covers the seam this subtask's
 // second defect was found in: the early return Reconcile takes when its own
 // plan is empty (added for INV-6) used to run before Applier.Apply was ever
@@ -342,7 +494,7 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 			"0", "1", "max 100000", "0")
 
 		// A CPU request with no CPU limit: Burstable QoS (matching the
-		// seeded cgroup path) with hasPositiveCPULimit false, so
+		// seeded cgroup path) with no predicted CPU quota, so
 		// BurstActive stays false and Desired's plan needs zero writes --
 		// exactly the shape AC-4's Note exists for.
 		pod := testPod(uid, "", map[string]string{annotations.BurstKey: ""})
@@ -426,6 +578,46 @@ func TestSeamNotesReachUserThroughReconciler(t *testing.T) {
 	})
 }
 
+func TestReconcilerReportsActualMissingQuotaOnce(t *testing.T) {
+	root := t.TempDir()
+	const uid = "45454545-1111-2222-3333-444444444444"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "1", "max 100000", "0")
+	pod := testPod(uid, "500m", map[string]string{annotations.BurstKey: ""})
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	lister := corelisters.NewPodLister(indexer)
+	fakeRecorder := record.NewFakeRecorder(10)
+	recorder := observe.NewRecorder(prometheus.NewRegistry(), fakeRecorder, "node-a")
+	applier := apply.NewApplier(root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, recorder, observe.NewEventRecorder(fakeRecorder))
+	reconciler := NewReconciler(lister, applier, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, observe.NewMetrics(prometheus.NewRegistry()), "node-a")
+	key, err := cache.MetaNamespaceKeyFunc(pod)
+	if err != nil {
+		t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := reconciler.Reconcile(context.Background(), key, i > 0); err != nil {
+			t.Fatalf("Reconcile() pass %d error = %v", i+1, err)
+		}
+	}
+	select {
+	case event := <-fakeRecorder.Events:
+		if !strings.Contains(event, string(observe.ReasonTierInactive)) {
+			t.Fatalf("event = %q, want TierInactive", event)
+		}
+	default:
+		t.Fatal("no TierInactive Event for burst request whose cgroup has no quota")
+	}
+	select {
+	case event := <-fakeRecorder.Events:
+		t.Fatalf("unexpected duplicate Event on unchanged resync: %q", event)
+	default:
+	}
+}
+
 // podsInTierSamples extracts cpu_pods_in_tier's samples from a Gather()
 // snapshot, keyed by "namespace|qos_class|tier" (node is omitted: every
 // sample in these tests shares the same node label).
@@ -455,11 +647,9 @@ func podsInTierSamples(t *testing.T, families []*dto.MetricFamily) map[string]fl
 }
 
 // TestPodsInTierReflectsFullNodeState covers the fix for cpu_pods_in_tier
-// (previously registered but never written in production): the gauge is
-// recomputed from a full listing of the informer cache on every Reconcile
-// call, not incremented per pod, so it cannot drift from reality and does
-// not depend on which specific pod's key triggered the pass -- the key used
-// below names a pod that is not even in the cache.
+// (previously registered but never written in production): one full scan
+// seeds every pod, then a real delete key removes only that pod's confirmed
+// membership without disturbing the others.
 func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 	root := t.TempDir()
 
@@ -480,6 +670,13 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 		annotations.BurstKey: "",
 	})
 	inactiveBurstPod.Name = "inactive-burst-pod"
+
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(idlePod.UID),
+		"1", "1", "50000 100000", "0")
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(burstPod.UID),
+		"0", "1", "50000 100000", "50000")
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, string(inactiveBurstPod.UID),
+		"0", "1", "max 100000", "0")
 
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	for _, pod := range []*corev1.Pod{idlePod, burstPod, inactiveBurstPod} {
@@ -508,13 +705,12 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 		t.Fatalf("cpu_pods_in_tier samples = %v, want %v", got, want)
 	}
 
-	// Removing a pod from the cache and reconciling again must shrink the
-	// gauge back down -- proving the recompute is a full replace, not an
-	// increment that could only ever grow.
+	// Removing a pod from the cache and delivering its informer delete key
+	// must shrink the gauge back down.
 	if err := indexer.Delete(idlePod); err != nil {
 		t.Fatalf("indexer.Delete: %v", err)
 	}
-	if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
+	if err := reconciler.Reconcile(context.Background(), "prod/idle-pod", false); err != nil {
 		t.Fatalf("Reconcile() second pass error = %v", err)
 	}
 
@@ -526,6 +722,162 @@ func TestPodsInTierReflectsFullNodeState(t *testing.T) {
 	want = map[string]float64{"prod|Burstable|burst": 1}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("cpu_pods_in_tier samples after delete = %v, want %v", got, want)
+	}
+}
+
+func TestPodsInTierUsesActualCgroupStateNotAnnotations(t *testing.T) {
+	root := t.TempDir()
+	requestedOnly := testPod("57575757-1111-1111-1111-111111111111", "500m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	requestedOnly.Name = "requested-only"
+	requestedOnly.Namespace = "requested"
+	actualOnly := testPod("57575757-2222-2222-2222-222222222222", "500m", nil)
+	actualOnly.Name = "actual-only"
+	actualOnly.Namespace = "actual"
+
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(requestedOnly.UID),
+		"0", "1", "50000 100000", "0")
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(actualOnly.UID),
+		"1", "1", "50000 100000", "0")
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for _, pod := range []*corev1.Pod{requestedOnly, actualOnly} {
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+	}
+	registry := prometheus.NewRegistry()
+	metrics := observe.NewMetrics(registry)
+	reconciler := NewReconciler(corelisters.NewPodLister(indexer), &fakeApplier{}, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() error = %v", err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	want := map[string]float64{"actual|Burstable|idle": 1}
+	if got := podsInTierSamples(t, families); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpu_pods_in_tier = %v, want actual cgroup state %v", got, want)
+	}
+}
+
+func TestPodsInTierPreservesLastKnownStateOnTransientReadFailure(t *testing.T) {
+	root := t.TempDir()
+	const uid = "57575757-3333-3333-3333-333333333333"
+	pod := testPod(uid, "500m", map[string]string{annotations.TierKey: annotations.TierValueIdle})
+	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"1", "1", "50000 100000", "0")
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	registry := prometheus.NewRegistry()
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), &fakeApplier{}, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(registry), "node-a",
+	)
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() error = %v", err)
+	}
+
+	weightPath := filepath.Join(dir, apply.KnobCPUWeight)
+	if err := os.Remove(weightPath); err != nil {
+		t.Fatalf("remove cpu.weight: %v", err)
+	}
+	if err := os.Mkdir(weightPath, 0o755); err != nil {
+		t.Fatalf("replace cpu.weight with unreadable shape: %v", err)
+	}
+	key, err := cache.MetaNamespaceKeyFunc(pod)
+	if err != nil {
+		t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+	}
+	if err := reconciler.Reconcile(context.Background(), key, false); err == nil {
+		t.Fatal("Reconcile() error = nil, want transient snapshot failure")
+	}
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	want := map[string]float64{"prod|Burstable|idle": 1}
+	if got := podsInTierSamples(t, families); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpu_pods_in_tier after transient read failure = %v, want last confirmed state %v", got, want)
+	}
+}
+
+func TestPodsInTierFullRefreshPreservesLastKnownStateOnTransientReadFailure(t *testing.T) {
+	root := t.TempDir()
+	const uid = "57575757-4444-4444-4444-444444444444"
+	pod := testPod(uid, "500m", map[string]string{annotations.TierKey: annotations.TierValueIdle})
+	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"1", "1", "50000 100000", "0")
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	registry := prometheus.NewRegistry()
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), &fakeApplier{}, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(registry), "node-a",
+	)
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier() initial error = %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, apply.KnobCPUWeight), []byte("not-a-weight"), 0o644); err != nil {
+		t.Fatalf("corrupt cpu.weight fixture: %v", err)
+	}
+	if err := reconciler.refreshPodsInTier(); err == nil {
+		t.Fatal("refreshPodsInTier() error = nil, want transient snapshot failure")
+	}
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	want := map[string]float64{"prod|Burstable|idle": 1}
+	if got := podsInTierSamples(t, families); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cpu_pods_in_tier after failed full refresh = %v, want last confirmed state %v", got, want)
+	}
+}
+
+func TestReconcileForgetsApplierStateWhenPodIsDeleted(t *testing.T) {
+	root := t.TempDir()
+	const uid = "57575757-5555-5555-5555-555555555555"
+	pod := testPod(uid, "500m", nil)
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "20", "50000 100000", "0")
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	applier := &fakeApplier{}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), applier, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+	key, err := cache.MetaNamespaceKeyFunc(pod)
+	if err != nil {
+		t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+	}
+	if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+		t.Fatalf("initial Reconcile() error = %v", err)
+	}
+	if err := indexer.Delete(pod); err != nil {
+		t.Fatalf("indexer.Delete: %v", err)
+	}
+	if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+		t.Fatalf("delete Reconcile() error = %v", err)
+	}
+
+	want := []types.UID{types.UID(uid)}
+	if !reflect.DeepEqual(applier.forgotUIDs, want) {
+		t.Fatalf("forgot UIDs = %v, want %v", applier.forgotUIDs, want)
 	}
 }
 
@@ -630,6 +982,7 @@ func TestReconcileLogsQoSStatusMismatch(t *testing.T) {
 // a regression that special-cased "still present" keys into a no-op
 // instead of always re-Setting them.
 func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
+	root := t.TempDir()
 	podA := testPod("88888888-1111-1111-1111-111111111111", "500m", map[string]string{
 		annotations.TierKey: annotations.TierValueIdle,
 	})
@@ -639,6 +992,10 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 		annotations.TierKey: annotations.TierValueIdle,
 	})
 	podB.Name = "idle-b"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(podA.UID),
+		"1", "1", "50000 100000", "0")
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(podB.UID),
+		"1", "1", "50000 100000", "0")
 
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	for _, pod := range []*corev1.Pod{podA, podB} {
@@ -650,7 +1007,7 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	metrics := observe.NewMetrics(registry)
-	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+	reconciler := NewReconciler(lister, &fakeApplier{}, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 	if err := reconciler.refreshPodsInTier(); err != nil {
 		t.Fatalf("refreshPodsInTier() first pass error = %v", err)
@@ -698,6 +1055,7 @@ func TestPodsInTierSharedLabelCountDecrements(t *testing.T) {
 // (Set/Delete from the refresh goroutine, Gather from this one) under the
 // race detector, the concurrency the fixed code must tolerate.
 func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
+	root := t.TempDir()
 	persistentPod := testPod("99999999-1111-1111-1111-111111111111", "500m", map[string]string{
 		annotations.TierKey: annotations.TierValueIdle,
 	})
@@ -709,6 +1067,10 @@ func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
 	})
 	flappingPod.Name = "flapping"
 	flappingPod.Namespace = "flapping-ns"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(persistentPod.UID),
+		"1", "1", "50000 100000", "0")
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, string(flappingPod.UID),
+		"0", "1", "50000 100000", "50000")
 
 	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
 	if err := indexer.Add(persistentPod); err != nil {
@@ -718,7 +1080,7 @@ func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
 
 	registry := prometheus.NewRegistry()
 	metrics := observe.NewMetrics(registry)
-	reconciler := NewReconciler(lister, &fakeApplier{}, t.TempDir(), cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
+	reconciler := NewReconciler(lister, &fakeApplier{}, root, cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs, metrics, "node-a")
 
 	// Intent: establish the persistent series before the race starts, so
 	// the poll loop below only ever has to tell "still 1" apart from
@@ -731,8 +1093,8 @@ func TestPodsInTierNoObservableWindowUnderConcurrentScrape(t *testing.T) {
 	done := make(chan struct{})
 	errs := make(chan error, 1)
 
-	// Intent: this goroutine is the only writer to both indexer and
-	// reconciler.podsInTierLabels for the rest of the test, matching
+	// Intent: this goroutine is the only writer to both indexer and the
+	// reconciler's membership maps for the rest of the test, matching
 	// production's single-goroutine workqueue loop (informer.go) -- the
 	// invariant that lets refreshPodsInTier skip locking that field.
 	go func() {
@@ -857,6 +1219,37 @@ func TestPodNoteDeduplication(t *testing.T) {
 		return pod
 	}
 
+	t.Run("persistent_cgroup_work_does_not_repeat_unchanged_notice", func(t *testing.T) {
+		root := t.TempDir()
+		const uid = "77777777-0000-0000-0000-000000000000"
+		seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, uid,
+			"1", "1", "max 100000", "0")
+		pod := testPod(uid, "", map[string]string{annotations.TierKey: "future-tier"})
+		indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		if err := indexer.Add(pod); err != nil {
+			t.Fatalf("indexer.Add: %v", err)
+		}
+		applier := &fakeApplier{}
+		reconciler := NewReconciler(
+			corelisters.NewPodLister(indexer), applier, root,
+			cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+			observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+		)
+		key, err := cache.MetaNamespaceKeyFunc(pod)
+		if err != nil {
+			t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+		}
+
+		for i := 0; i < 2; i++ {
+			if err := reconciler.Reconcile(context.Background(), key, true); err != nil {
+				t.Fatalf("Reconcile() pass %d: %v", i+1, err)
+			}
+		}
+		if got, want := applier.applyReportNotices, []bool{true, false}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Apply reportNotices flags = %v, want %v", got, want)
+		}
+	})
+
 	t.Run("three_unchanged_passes_fire_exactly_once", func(t *testing.T) {
 		root := t.TempDir()
 		const uid = "77777777-1111-1111-1111-111111111111"
@@ -953,7 +1346,7 @@ func TestPodNoteDeduplication(t *testing.T) {
 
 		// Pass 3: the annotation comes back with the CPU limit still
 		// missing -- the same Note reappears and must fire again, not stay
-		// suppressed by pass 1's now-stale record (podNoteChanged deleted
+		// suppressed by pass 1's now-stale record (recordPodNotice deleted
 		// that record when pass 2 observed zero notes).
 		if err := indexer.Update(pod); err != nil {
 			t.Fatalf("indexer.Update (restore annotation): %v", err)
@@ -1018,12 +1411,10 @@ func TestPodNoteDeduplication(t *testing.T) {
 		if err := indexer.Delete(pod); err != nil {
 			t.Fatalf("indexer.Delete: %v", err)
 		}
-		// A second pass with an unrelated key -- refreshPodsInTier runs
-		// unconditionally at the top of Reconcile and lists the full cache
-		// regardless of which key triggered the pass, exactly like
-		// TestPodsInTierReflectsFullNodeState relies on for the analogous
-		// podsInTierLabels leak guard.
-		if err := reconciler.Reconcile(context.Background(), "prod/does-not-exist", false); err != nil {
+		// A real informer delete event carries this same namespace/name key;
+		// the reconciler uses its UID bookkeeping to drop notification and
+		// metric state even though the pod has already left the cache.
+		if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
 			t.Fatalf("Reconcile() second pass error = %v", err)
 		}
 
@@ -1031,4 +1422,39 @@ func TestPodNoteDeduplication(t *testing.T) {
 			t.Fatalf("len(lastNotes) after pod left the cache = %d, want 0: a departed pod's note-tracking entry must not leak", got)
 		}
 	})
+}
+
+func TestNoticeIsRetriedWhenApplyFailsBeforeReporting(t *testing.T) {
+	root := t.TempDir()
+	const uid = "77777777-5555-5555-5555-555555555555"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "1", "max 100000", "0")
+	pod := testPod(uid, "", map[string]string{annotations.BurstKey: ""})
+	pod.Spec.Containers[0].Resources.Requests = corev1.ResourceList{
+		corev1.ResourceCPU: resource.MustParse("500m"),
+	}
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	applier := &fakeApplier{applyErrors: []error{errors.New("transient snapshot failure")}}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), applier, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+	key, err := cache.MetaNamespaceKeyFunc(pod)
+	if err != nil {
+		t.Fatalf("MetaNamespaceKeyFunc: %v", err)
+	}
+
+	if err := reconciler.Reconcile(context.Background(), key, false); err == nil {
+		t.Fatal("first Reconcile() error = nil, want transient Apply failure")
+	}
+	if err := reconciler.Reconcile(context.Background(), key, false); err != nil {
+		t.Fatalf("second Reconcile() error = %v, want retry to succeed", err)
+	}
+	if applier.applyCalls != 2 {
+		t.Fatalf("Apply calls = %d, want 2: failed notice delivery must remain retryable", applier.applyCalls)
+	}
 }

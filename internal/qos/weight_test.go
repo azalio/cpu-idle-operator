@@ -230,3 +230,48 @@ func TestWeightTableNativeSidecar(t *testing.T) {
 		})
 	}
 }
+
+func TestRestoreWeightUsesPodLevelRequest(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{containerWithCPURequest("app", "500m")},
+		Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+		},
+	}
+
+	if got := RestoreWeight(spec); got != 79 {
+		t.Fatalf("RestoreWeight() = %d, want 79 from the pod-level 2 CPU request", got)
+	}
+}
+
+func TestRestoreWeightIncludesPodOverhead(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{containerWithCPURequest("app", "500m")},
+		Overhead:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+	}
+
+	if got := RestoreWeight(spec); got != 39 {
+		t.Fatalf("RestoreWeight() = %d, want 39 from 500m request plus 500m overhead", got)
+	}
+}
+
+func TestRestoreWeightClampsAtCgroupMaximum(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{containerWithCPURequest("app", "300")},
+	}
+
+	if got := RestoreWeight(spec); got != 10000 {
+		t.Fatalf("RestoreWeight() = %d, want cgroup v2 maximum 10000", got)
+	}
+}
+
+func TestRestoreWeightMatchesBestEffortPodLevelOverride(t *testing.T) {
+	spec := corev1.PodSpec{
+		Containers: []corev1.Container{containerWithCPURequest("app", "500m")},
+		Resources:  &corev1.ResourceRequirements{},
+	}
+
+	if got := RestoreWeight(spec); got != 1 {
+		t.Fatalf("RestoreWeight() = %d, want BestEffort weight 1 despite the container request", got)
+	}
+}

@@ -158,6 +158,37 @@ func TestPodCgroupPathRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestExpandSystemdSlice(t *testing.T) {
+	tests := []struct {
+		name    string
+		slice   string
+		want    string
+		wantErr bool
+	}{
+		{name: "single", slice: "kubepods.slice", want: "/kubepods.slice"},
+		{name: "nested", slice: "kubelet-kubepods-burstable.slice", want: "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-burstable.slice"},
+		{name: "root", slice: "-.slice", want: "/"},
+		{name: "missing suffix", slice: "kubepods", wantErr: true},
+		{name: "path separator", slice: "foo/bar.slice", wantErr: true},
+		{name: "empty component", slice: "foo--bar.slice", wantErr: true},
+		{name: "empty name", slice: ".slice", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := expandSystemdSlice(tc.slice)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expandSystemdSlice(%q) = %q, want error", tc.slice, got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("expandSystemdSlice(%q) = (%q, %v), want (%q, nil)", tc.slice, got, err, tc.want)
+			}
+		})
+	}
+}
+
 // TestVC1NoHardcodedRoot enforces VC1/CCR-3: every exported function in
 // this package takes the cgroup root as a parameter, so no file here may
 // hardcode the real cgroup root path. The forbidden literal is assembled

@@ -3,18 +3,30 @@ package cgroup
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// ErrCgroupGone indicates the pod cgroup directory disappeared between the
-// moment the caller learned about the pod (e.g. from an informer cache) and
-// the moment it tried to read or write a knob. The pod was deleted; this is
-// an expected race, not a bug, and callers should treat it as "nothing to
-// do" rather than retry or alert.
+// ErrCgroupGone indicates the pod cgroup directory is absent at the moment
+// of a read or write. This is normally a pod creation/deletion race; callers
+// that also know the Pod lifecycle must decide whether absence is expected
+// or whether a Running pod needs a retry.
 var ErrCgroupGone = errors.New("cgroup: pod cgroup is gone")
+
+// ErrKnobUnavailable means the pod cgroup directory still exists but the
+// requested control file does not. This is an unsupported or broken node
+// environment, not the normal pod-deletion race represented by
+// ErrCgroupGone.
+var ErrKnobUnavailable = errors.New("cgroup: required knob is unavailable")
+
+// ErrKnobNotAllowed means a caller requested a file outside the operator's
+// fixed CPU-control surface. Besides documenting ownership, this prevents a
+// path-like knob name (for example "../memory.max") from escaping the
+// already-validated pod directory.
+var ErrKnobNotAllowed = errors.New("cgroup: knob is not allowed")
 
 // ErrNotPodCgroup indicates dir does not point at an individual pod cgroup.
 // WriteKnob refuses to write above pod level: the kubepods root, a
@@ -43,11 +55,14 @@ var openKnobWriter = func(path string) (knobWriter, error) {
 
 // ReadKnob reads and trims the contents of the knob file dir/name.
 func ReadKnob(dir, name string) (string, error) {
+	if !allowedKnob(name) {
+		return "", fmt.Errorf("%w: %q", ErrKnobNotAllowed, name)
+	}
 	p := filepath.Join(dir, name)
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("%w: %s", ErrCgroupGone, p)
+			return "", missingPathError(dir, p)
 		}
 		return "", fmt.Errorf("cgroup: read knob %s: %w", p, err)
 	}
@@ -71,6 +86,9 @@ func ReadKnob(dir, name string) (string, error) {
 // callers can still do errors.Is(err, syscall.EINVAL) to distinguish a
 // kernel-rejected value from any other failure.
 func WriteKnob(root, kubepodsName, dir, name, value string) error {
+	if !allowedKnob(name) {
+		return fmt.Errorf("%w: %q", ErrKnobNotAllowed, name)
+	}
 	if err := guardWriteTarget(dir, root, kubepodsName); err != nil {
 		return err
 	}
@@ -79,12 +97,15 @@ func WriteKnob(root, kubepodsName, dir, name, value string) error {
 	f, err := openKnobWriter(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("%w: %s", ErrCgroupGone, p)
+			return missingPathError(dir, p)
 		}
 		return fmt.Errorf("cgroup: open knob %s: %w", p, err)
 	}
 
-	_, writeErr := f.Write([]byte(value))
+	n, writeErr := f.Write([]byte(value))
+	if writeErr == nil && n != len(value) {
+		writeErr = io.ErrShortWrite
+	}
 	closeErr := f.Close()
 	if closeErr != nil {
 		return fmt.Errorf("cgroup: close knob %s: %w", p, closeErr)
@@ -93,6 +114,29 @@ func WriteKnob(root, kubepodsName, dir, name, value string) error {
 		return fmt.Errorf("cgroup: write knob %s: %w", p, writeErr)
 	}
 	return nil
+}
+
+func allowedKnob(name string) bool {
+	switch name {
+	case "cpu.idle", "cpu.weight", "cpu.max", "cpu.max.burst":
+		return true
+	default:
+		return false
+	}
+}
+
+func missingPathError(dir, knobPath string) error {
+	info, err := os.Stat(dir)
+	if err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("%w: %s", ErrKnobUnavailable, knobPath)
+		}
+		return fmt.Errorf("%w: parent %s is not a directory", ErrKnobUnavailable, dir)
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: %s", ErrCgroupGone, knobPath)
+	}
+	return fmt.Errorf("%w: cannot inspect parent %s: %v", ErrKnobUnavailable, dir, err)
 }
 
 // extractPodUID recovers the pod UID that PodCgroupPath would need to

@@ -13,4 +13,8 @@ const (
 	TierValueIdle = "idle"
 	// BurstKey requests cpu.max.burst equal to the pod's CPU quota.
 	BurstKey = domainPrefix + "burst"
+	// GuardStateKey is an internal ownership marker. Before the node guard
+	// suppresses a pod, it records the exact knob/value to restore here so
+	// recovery survives enabled process restarts and explicit cleanup.
+	GuardStateKey = domainPrefix + "guard-state"
 )

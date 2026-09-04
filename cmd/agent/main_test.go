@@ -180,7 +180,7 @@ type journalingApplier struct {
 	calls []string
 }
 
-func (j *journalingApplier) Apply(_ context.Context, pod *corev1.Pod) error {
+func (j *journalingApplier) Apply(_ context.Context, pod *corev1.Pod, _ bool) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.calls = append(j.calls, "Apply:"+pod.Name)

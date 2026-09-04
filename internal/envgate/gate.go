@@ -3,48 +3,14 @@
 package envgate
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 )
-
-// minKernelMajor and minKernelMinor are the lowest kernel version this
-// operator supports: cpu.idle for cgroup entities landed upstream in 5.15.
-const (
-	minKernelMajor = 5
-	minKernelMinor = 15
-)
-
-// UnameFunc returns the running kernel's release string, in the same
-// format as the third field of `uname -r` (e.g. "6.17.0-061700-generic").
-// It is a Check parameter rather than a direct syscall so tests can pin the
-// kernel version without depending on the host the tests run on.
-type UnameFunc func() (string, error)
-
-// Result is Check's environment decision.
-type Result struct {
-	// Ready is true only when every check passed: cgroup v2 unified, a
-	// recognized kubepods driver, and kernel >= 5.15.
-	Ready bool
-	// Reason explains the decision. It is always set, even when Ready is
-	// true (ReasonOK).
-	Reason Reason
-	// Driver is the detected cgroup driver. It is the zero value when
-	// detection never reached a conclusion (ReasonCgroupV1,
-	// ReasonCgroupHybrid, ReasonKubepodsMissing, ReasonDriverUnknown).
-	Driver cgroup.Driver
-	// Experimental is true when Driver is cgroup.DriverCgroupfs: this path
-	// is implemented but unverified on a live stand (see
-	// hack/stand-probe.sh), unlike DriverSystemd which is stand-verified.
-	Experimental bool
-}
 
 // warnLogger receives Check's single experimental-driver warning. It is a
 // package variable rather than a Check parameter because the Check
@@ -77,10 +43,10 @@ var statfsType = func(path string) (int64, error) {
 // kubelet; a kubelet-root-prefixed name, e.g. "kubelet-kubepods" on kind,
 // for a kubelet started with a non-default --cgroup-root).
 //
-// The non-nil error return is reserved for uname itself failing or
-// returning a release string Check cannot parse at all; every filesystem
-// outcome Check can classify is reported through Result.Reason instead, so
-// a caller can always log and expose a decision without a crash loop.
+// Every environment outcome, including uname failure or an unparseable
+// release, is reported through Result.Reason so a caller can always expose a
+// fail-closed decision without a crash loop. The error result remains in the
+// API for callers that inject a future check with a genuinely internal error.
 func Check(root, kubepodsName string, uname UnameFunc) (Result, error) {
 	if reason := cgroupVersionReason(root); reason != ReasonOK {
 		return Result{Ready: false, Reason: reason}, nil
@@ -89,15 +55,6 @@ func Check(root, kubepodsName string, uname UnameFunc) (Result, error) {
 	driver, reason := detectDriver(root, kubepodsName)
 	if reason != ReasonOK {
 		return Result{Ready: false, Reason: reason}, nil
-	}
-
-	release, err := uname()
-	if err != nil {
-		return Result{}, fmt.Errorf("envgate: uname: %w", err)
-	}
-	newEnough, err := kernelAtLeast(release, minKernelMajor, minKernelMinor)
-	if err != nil {
-		return Result{}, fmt.Errorf("envgate: parse kernel release %q: %w", release, err)
 	}
 
 	result := Result{Driver: driver}
@@ -109,16 +66,35 @@ func Check(root, kubepodsName string, uname UnameFunc) (Result, error) {
 		warnLogger.Warn("cgroup driver detected as cgroupfs: this path is experimental and unverified on a live stand",
 			"driver", string(driver))
 	}
-
-	if !newEnough {
+	if reason := kernelReason(uname); reason != ReasonOK {
 		result.Ready = false
-		result.Reason = ReasonKernelTooOld
+		result.Reason = reason
+		return result, nil
+	}
+	if !requiredCPUKnobsPresent(root, kubepodsName, driver) {
+		result.Ready = false
+		result.Reason = ReasonRequiredKnobMissing
 		return result, nil
 	}
 
 	result.Ready = true
 	result.Reason = ReasonOK
 	return result, nil
+}
+
+var requiredCPUKnobs = [...]string{"cpu.idle", "cpu.weight", "cpu.max", "cpu.max.burst"}
+
+func requiredCPUKnobsPresent(root, kubepodsName string, driver cgroup.Driver) bool {
+	dir := filepath.Join(root, kubepodsName)
+	if driver == cgroup.DriverSystemd {
+		dir += ".slice"
+	}
+	for _, knob := range requiredCPUKnobs {
+		if !fileExists(filepath.Join(dir, knob)) {
+			return false
+		}
+	}
+	return true
 }
 
 // cgroupVersionReason classifies root's cgroup mount. It returns ReasonOK
@@ -166,32 +142,6 @@ func detectDriver(root, kubepodsName string) (cgroup.Driver, Reason) {
 		// so it is reported distinctly from the empty-node case above.
 		return "", ReasonDriverUnknown
 	}
-}
-
-// kernelAtLeast reports whether release is >= minMajor.minMinor, comparing
-// only the major.minor components. release may carry a distro suffix after
-// the version proper (e.g. "6.17.0-061700-generic" on the reference stand);
-// everything from the first "-" onward is ignored.
-func kernelAtLeast(release string, minMajor, minMinor int) (bool, error) {
-	base, _, _ := strings.Cut(release, "-")
-	parts := strings.SplitN(base, ".", 3)
-	if len(parts) < 2 {
-		return false, fmt.Errorf("expected at least major.minor in %q", release)
-	}
-
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return false, fmt.Errorf("major version %q: %w", parts[0], err)
-	}
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return false, fmt.Errorf("minor version %q: %w", parts[1], err)
-	}
-
-	if major != minMajor {
-		return major > minMajor, nil
-	}
-	return minor >= minMinor, nil
 }
 
 // dirExists reports whether path exists and is a directory. Any stat error

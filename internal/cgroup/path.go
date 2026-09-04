@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"path"
 	"strings"
-
-	"github.com/opencontainers/cgroups/systemd"
 )
 
 // DefaultKubepodsName is the top-level kubepods cgroup name a stock kubelet
@@ -59,7 +57,7 @@ func PodCgroupPath(root, kubepodsName string, driver Driver, qos QoSClass, podUI
 //
 // kubepodsName may itself carry systemd's dash-nesting (e.g. kind's
 // "kubelet-kubepods", nested under a "kubelet.slice" root kubelet creates
-// for its own non-default --cgroup-root): systemd.ExpandSlice re-derives
+// for its own non-default --cgroup-root): expandSystemdSlice re-derives
 // that outer nesting from scratch starting at "/", but root already names
 // the directory that outer nesting lives under, so the shared leading
 // fragment is stripped once before joining onto root — otherwise the outer
@@ -79,16 +77,16 @@ func systemdPodCgroupPath(root, kubepodsName string, qos QoSClass, podUID string
 		sliceName = kubepodsName + "-" + string(qos) + "-" + podName + ".slice"
 	}
 
-	expanded, err := systemd.ExpandSlice(sliceName)
+	expanded, err := expandSystemdSlice(sliceName)
 	if err != nil {
 		return "", fmt.Errorf("cgroup: expand slice %q: %w", sliceName, err)
 	}
 
-	kubepodsExpanded, err := systemd.ExpandSlice(kubepodsName + ".slice")
+	kubepodsExpanded, err := expandSystemdSlice(kubepodsName + ".slice")
 	if err != nil {
 		return "", fmt.Errorf("cgroup: expand slice %q: %w", kubepodsName+".slice", err)
 	}
-	// outerPrefix is everything ExpandSlice nested kubepodsName's own slice
+	// outerPrefix is everything expandSystemdSlice nested kubepodsName's own slice
 	// under -- "/" when kubepodsName has no dash of its own (the default
 	// "kubepods" case: nothing to strip), or the dash-nested parent path
 	// otherwise (e.g. "/kubelet.slice"). expanded always has kubepodsExpanded
@@ -100,7 +98,7 @@ func systemdPodCgroupPath(root, kubepodsName string, qos QoSClass, podUID string
 		trimmed := strings.TrimPrefix(expanded, outerPrefix)
 		if trimmed == expanded {
 			// Unreachable given the construction above, but fails loudly
-			// rather than silently double-nesting root if ExpandSlice's
+			// rather than silently double-nesting root if systemd's
 			// algorithm ever changes underneath this package.
 			return "", fmt.Errorf("cgroup: expanded slice %q does not share outer prefix %q", expanded, outerPrefix)
 		}
@@ -108,6 +106,31 @@ func systemdPodCgroupPath(root, kubepodsName string, qos QoSClass, podUID string
 	}
 
 	return path.Join(root, expanded), nil
+}
+
+// expandSystemdSlice expands systemd's dash-separated slice hierarchy.
+// Keeping this small pure operation here avoids importing the Linux-only
+// opencontainers/cgroups manager just to format a path, so path and policy
+// tests can run on developer platforms as well as Linux.
+func expandSystemdSlice(slice string) (string, error) {
+	const suffix = ".slice"
+	if !strings.HasSuffix(slice, suffix) || strings.Contains(slice, "/") {
+		return "", fmt.Errorf("invalid slice name %q", slice)
+	}
+	name := strings.TrimSuffix(slice, suffix)
+	if name == "-" {
+		return "/", nil
+	}
+	components := strings.Split(name, "-")
+	var expanded, prefix string
+	for _, component := range components {
+		if component == "" {
+			return "", fmt.Errorf("invalid slice name %q", slice)
+		}
+		expanded += "/" + prefix + component + suffix
+		prefix += component + "-"
+	}
+	return expanded, nil
 }
 
 // cgroupfsPodCgroupPath builds the flat cgroupfs path. UID dashes are kept

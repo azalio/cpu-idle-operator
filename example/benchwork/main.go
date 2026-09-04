@@ -1,8 +1,9 @@
 // benchwork is the load target for the example scenario: an HTTP server
 // whose /work endpoint burns a fixed, deterministic amount of CPU per
-// request and nothing else — no I/O, no allocations in the hot loop, no
-// shared state between requests. That makes its latency a clean probe of
-// one thing only: how much CPU the pod's cgroup is actually getting.
+// request and nothing else — no I/O or allocations in the hot loop, and
+// only atomic counters shared between requests. That makes its latency a
+// clean probe of one thing only: how much CPU the pod's cgroup is actually
+// getting.
 //
 // BENCH_ITERATIONS (default 1_000_000) sets the per-request work. On the
 // measured stand one million xorshift iterations cost single-digit
@@ -25,6 +26,7 @@ import (
 
 var (
 	completed atomic.Uint64
+	sequence  atomic.Uint64
 	sink      atomic.Uint64
 )
 
@@ -68,13 +70,7 @@ func requestWork(ctx context.Context, iterations int, seed uint64) (uint64, bool
 	return x, true
 }
 
-func main() {
-	iterations := envInt("BENCH_ITERATIONS", 1_000_000)
-	listen := os.Getenv("BENCH_LISTEN")
-	if listen == "" {
-		listen = ":8080"
-	}
-
+func newHandler(iterations int) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -93,19 +89,29 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		requestID := completed.Add(1)
+		requestID := sequence.Add(1)
 		result, finished := requestWork(r.Context(), iterations, requestID)
 		if !finished {
 			return
 		}
 		sink.Store(result)
+		completed.Add(1)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = fmt.Fprintf(w, "ok %016x\n", result)
 	})
+	return mux
+}
+
+func main() {
+	iterations := envInt("BENCH_ITERATIONS", 1_000_000)
+	listen := os.Getenv("BENCH_LISTEN")
+	if listen == "" {
+		listen = ":8080"
+	}
 
 	server := &http.Server{
 		Addr:              listen,
-		Handler:           mux,
+		Handler:           newHandler(iterations),
 		ReadHeaderTimeout: 2 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}

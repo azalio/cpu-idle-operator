@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 
@@ -31,14 +32,24 @@ import (
 // duplicate their write or tracing logic). Tests substitute a fake to
 // assert call counts without touching a filesystem.
 type Applier interface {
-	Apply(ctx context.Context, pod *corev1.Pod) error
+	Apply(ctx context.Context, pod *corev1.Pod, reportNotices bool) error
 	Revert(ctx context.Context, pod *corev1.Pod, state apply.Snapshot) error
+}
+
+type pendingWeightRepairer interface {
+	NeedsWeightRepair(pod *corev1.Pod, snapshot apply.Snapshot) bool
+}
+
+type podStateForgetter interface {
+	ForgetPod(uid types.UID)
 }
 
 // Reconciler drives a single pod's actual cgroup state toward its
 // annotation-derived desired tier state. It reads pods exclusively from
 // an informer's cache (never a direct API call) and calls only the
-// already-built Applier for every write.
+// already-built Applier for every write. reportNotices is true only when the
+// annotation notice set changed since its last successful publication; cgroup
+// write outcome reporting remains unconditional inside apply.Applier.
 type Reconciler struct {
 	lister       corelisters.PodLister
 	applier      Applier
@@ -49,45 +60,40 @@ type Reconciler struct {
 	node         string
 	logger       *slog.Logger
 
-	// podsInTierLabels is the label-set metrics.PodsInTier carried after
-	// the previous refreshPodsInTier pass. It exists purely so that pass
-	// can delete only the series that disappeared (a pod that changed tier
-	// or left the cache) instead of calling GaugeVec.Reset -- Reset drops
-	// every child immediately, and a scrape landing in the window between
-	// that Reset and this pass's last Set would read zero or a partial
-	// count for a pod whose tier never actually changed. This is state
-	// about the metric's own previous shape, not about a pod, so it does
-	// not reintroduce the per-pod cache Reconcile otherwise avoids (see
-	// Reconcile's Intent comment on refreshPodsInTier). Reconcile is only
-	// ever driven by Informer.Run's single-goroutine workqueue loop
-	// (informer.go), so this field is written by at most one goroutine at
-	// a time and needs no lock of its own.
-	podsInTierLabels map[podsInTierKey]struct{}
+	// Actual tier membership is initialized from one full-node cgroup scan,
+	// then maintained per reconciled pod. Re-reading every pod cgroup on
+	// every pod event would turn an informer resync into O(N^2) filesystem
+	// work. Informer.Run serializes reconciliation, so these maps need no
+	// lock; Prometheus collectors remain safe for concurrent scrapes.
+	metricsInitialized bool
+	podMemberships     map[types.UID]podTierMembership
+	podUIDByKey        map[string]types.UID
+	podsInTierCounts   map[podsInTierKey]float64
 
 	// lastNotes is the signature (noteSignature) of the tier.Note set most
-	// recently reported for each pod this Reconciler has seen, keyed by the
-	// same namespace/name key Reconcile is invoked with. It exists because
-	// Apply always reports whatever notes tier.Desired currently returns
-	// (Applier.reportNotes) purely because a Note was present at all, and
-	// Reconcile routes a pod through Apply on every pass a Note is present
-	// even when its own plan is empty (see Reconcile's routing comment on
-	// wantsActiveTier || len(notes) != 0) -- without this record, a Note
+	// recently reported for each pod this Reconciler has seen, keyed by UID
+	// so a delete/recreate under the same name is a new notification. It
+	// exists because Reconcile routes a pod through Apply on every pass a
+	// Note is present, even when its own plan is empty (see Reconcile's
+	// routing comment on wantsActiveTier || len(notes) != 0). Apply publishes
+	// those notes whenever this caller passes reportNotices=true; without
+	// this record, a Note
 	// whose underlying condition never changes (a burst request still
 	// missing a CPU limit, an annotation still carrying the same
 	// unrecognized value) would re-fire its Event and increment
-	// cpu_tier_apply_total on every ~60s resync forever, even though
-	// nothing about the pod changed between passes.
+	// cpu_tier_apply_total on every ~60s resync if every call enabled notice
+	// reporting, even though nothing about the pod changed between passes.
 	//
-	// Entries are deleted the moment a pod's notes go empty (podNoteChanged)
+	// Entries are deleted the moment a pod's notices go empty (recordPodNotice)
 	// and again on every refreshPodsInTier pass for any pod that has left
 	// the informer cache entirely (pruneNoteState) -- the same "recompute
 	// from a full listing, then drop what no longer applies" shape
-	// podsInTierLabels above already uses -- so this map cannot grow
-	// forever on a node with high pod churn. It is state about what this
+	// podMemberships above already uses -- so this map cannot grow forever
+	// on a node with high pod churn. It is state about what this
 	// Reconciler last told the user, not a cache of pod weight, and like
-	// podsInTierLabels needs no lock: Reconcile only ever runs on
+	// the membership maps need no lock: Reconcile only ever runs on
 	// Informer.Run's single-goroutine workqueue loop.
-	lastNotes map[string]string
+	lastNotes map[types.UID]string
 }
 
 // NewReconciler builds a Reconciler that reconciles pods from lister's
@@ -163,18 +169,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		return err
 	}
 
-	// Intent: recomputed from a full listing of this node's pods on every
-	// call, never incremented/decremented per event — a gauge is a
-	// snapshot of current state, and this Reconciler only ever sees pods
-	// one at a time, so an incremental update could never recover from a
-	// missed or misordered event without drifting from reality forever. A
-	// full recompute is self-correcting by construction: a stale entry
-	// left over from a pod that has since changed tier, or been deleted,
-	// simply does not get re-Set this pass and Reset() below clears it,
-	// rather than requiring every code path that could change a pod's
-	// tier membership to also remember to decrement the old bucket.
-	if err := r.refreshPodsInTier(); err != nil {
-		r.logger.Error("agent: failed to refresh cpu_pods_in_tier", "error", err)
+	// One full scan seeds actual-state metrics and identity bookkeeping.
+	// Every later event updates only its own pod, avoiding O(N^2) cgroup
+	// reads across the informer's initial list and periodic resync.
+	if !r.metricsInitialized {
+		if err := r.refreshPodsInTier(); err != nil {
+			r.logger.Error("agent: initial cpu_pods_in_tier snapshot was partial", "error", err)
+		}
 	}
 
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
@@ -185,10 +186,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	pod, err := r.lister.Pods(namespace).Get(name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			r.removePodByKey(key)
 			return nil
 		}
 		return fmt.Errorf("agent: reconcile: get pod %s: %w", key, err)
 	}
+	// The API object for a static pod is a mirror pod with a different UID
+	// from the static pod whose cgroup kubelet created. Kubelet can translate
+	// that UID through its private pod manager, but an API-only node agent
+	// cannot. Computing a path from the mirror UID therefore targets a cgroup
+	// that does not exist. Exclude mirror pods from reconciliation and metrics
+	// instead of permanently retrying an unresolvable path and holding the
+	// whole agent unready.
+	if isMirrorPod(pod) {
+		r.removePodByKey(key)
+		return nil
+	}
+	r.observePodIdentity(key, pod.UID)
 
 	desired, notes := tier.Desired(pod)
 	wantsActiveTier := desired.IdleRequested || desired.BurstRequested
@@ -212,14 +226,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	snapshot, err := apply.ReadSnapshot(dir)
 	if err != nil {
 		if errors.Is(err, cgroup.ErrCgroupGone) {
+			if runningPodNeedsCgroup(pod) {
+				// A Running, non-terminating pod should already have its pod
+				// cgroup. Treat absence as transient/incorrect state and retry;
+				// silently folding it into deletion would leave the requested
+				// tier unapplied until an unrelated update or full resync.
+				return fmt.Errorf("agent: reconcile: running pod %s cgroup missing: %w", key, err)
+			}
+			r.forgetApplierPodState(pod.UID)
+			r.setPodActual(key, pod, apply.Snapshot{})
 			return nil
 		}
+		// A transient read failure says the current membership is unknown,
+		// not that both tiers are inactive. Keep the last confirmed sample;
+		// replacing it with an empty Snapshot would make the gauge lie until
+		// a later successful reconcile.
 		return fmt.Errorf("agent: reconcile: read snapshot: %w", err)
 	}
+	r.setPodActual(key, pod, snapshot)
 
 	// Intent: compare against the same target Applier itself would
 	// converge toward — desired as computed, or the fully-cleared state
-	// apply.Applier.Revert's own revertPlan compares against when no
+	// apply.Applier.Revert's own buildPlan compares against when no
 	// tier is requested — reusing apply.BuildPlan (ST-007) rather than
 	// re-deriving a second, potentially-divergent notion of "matches".
 	// restoreWeight only matters when the plan actually clears cpu.idle,
@@ -233,17 +261,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		target = tier.State{}
 	}
 	plan := apply.BuildPlan(target, snapshot, qos.RestoreWeight(pod.Spec))
+	needsWeightRepair := false
+	if !desired.IdleRequested {
+		if repairer, ok := r.applier.(pendingWeightRepairer); ok {
+			needsWeightRepair = repairer.NeedsWeightRepair(pod, snapshot)
+		}
+	}
+	hasCgroupWork := len(plan) != 0 || needsWeightRepair
+	actualBurstUnavailable := desired.BurstRequested && desired.BurstActive && !snapshot.HasQuota
 
 	// Intent: a Note is worth reporting again only the first time it
 	// appears and again if it changes (a different Code, or the same Code
 	// with a different Message) -- an unchanged Note repeated pass after
 	// pass carries no new information, exactly the condition INV-6 already
-	// treats as silence for cgroup writes. podNoteChanged compares this
+	// treats as silence for cgroup writes. podNoticeNeedsReport compares this
 	// pass's notes against the last set actually reported for this pod and
-	// records the new set as a side effect regardless of which branch
-	// below runs, so it must be called on every pass, not only when it
-	// might change the early-return decision.
-	notesChanged := r.podNoteChanged(key, notes)
+	// records the new set only after the reporting path succeeds. Committing
+	// it earlier would make a transient Apply failure suppress the retry and
+	// lose the Event permanently.
+	noticeSignature := noteSignature(notes)
+	if actualBurstUnavailable {
+		noticeSignature += string(observe.TierApplyReasonCgroupQuotaMissing) + "\x00"
+	}
+	noticesChanged := r.podNoticeNeedsReport(pod.UID, noticeSignature)
+	hasNotice := len(notes) != 0 || actualBurstUnavailable
 
 	// Intent: "nothing to write" and "nothing to say" are different
 	// conditions (AC-4/AC-16 — a burst request with no CPU limit, or an
@@ -251,27 +292,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	// cgroup itself needs no write). INV-6's early return only applies
 	// when both are true: a converged pod with no Note produces zero
 	// writes, zero Events, and no Info log, exactly as before.
-	if len(plan) == 0 && len(notes) == 0 {
+	if !hasCgroupWork && !hasNotice {
+		r.recordPodNotice(pod.UID, "")
 		return nil
 	}
 
 	// Intent: the fix for the repeated-Event defect -- a pod with nothing
 	// to write and a Note that has already been reported, unchanged, must
-	// stay silent too, or Apply's unconditional reportNotes would re-fire
-	// the same Event and cpu_tier_apply_total increment every resync pass
-	// forever (observed on a live stand as an ever-growing TierInactive
-	// count for a pod whose state never changed). A pod with real cgroup
-	// work to do (len(plan) != 0) always proceeds to Apply/Revert below
-	// regardless of notesChanged: the write itself must still happen.
-	if len(plan) == 0 && !notesChanged {
+	// stay silent too. A pod with real cgroup work to do (len(plan) != 0)
+	// always proceeds to Apply/Revert below regardless of noticesChanged:
+	// the write itself must still happen, while reportNotices=false prevents
+	// that work from re-firing the same annotation Event on every resync.
+	if !hasCgroupWork && !noticesChanged {
 		return nil
 	}
 
-	if resync && len(plan) != 0 {
+	if resync && hasCgroupWork {
 		r.metrics.ResyncDriftTotal.WithLabelValues(r.node, pod.Namespace, string(desired.QoSClass)).Inc()
 	}
 
-	if len(plan) != 0 {
+	if hasCgroupWork {
 		r.logger.Info("reconciling pod cgroup tier",
 			"pod", key,
 			"resync", resync,
@@ -289,13 +329,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 	// Revert would use (both IdleRequested and BurstActive stay false), so
 	// routing here through Apply instead of Revert changes only which
 	// function reports the outcome, never what the cgroup converges to.
-	if wantsActiveTier || len(notes) != 0 {
-		return r.applier.Apply(ctx, pod)
+	var reconcileErr error
+	if wantsActiveTier || hasNotice {
+		reconcileErr = r.applier.Apply(ctx, pod, hasNotice && noticesChanged)
+	} else {
+		reconcileErr = r.applier.Revert(ctx, pod, snapshot)
 	}
-	return r.applier.Revert(ctx, pod, snapshot)
+	if reconcileErr != nil {
+		return errors.Join(reconcileErr, r.refreshPodActual(key, pod, dir))
+	}
+	r.recordPodNotice(pod.UID, noticeSignature)
+	return r.refreshPodActual(key, pod, dir)
 }
 
-// noteSignature encodes notes into one comparable string so podNoteChanged
+// noteSignature encodes notes into one comparable string so
+// podNoticeNeedsReport
 // can detect any change -- a note appearing, disappearing, or changing its
 // Code or Message -- with a plain string comparison instead of a deep slice
 // comparison. Both Code and Message participate, not Code alone: two passes
@@ -318,29 +366,29 @@ func noteSignature(notes []tier.Note) string {
 	return b.String()
 }
 
-// podNoteChanged reports whether key's current notes differ from the set
-// last recorded for it in r.lastNotes, then updates that record to match
-// notes. The very first pass over a given key always reports a change
+// podNoticeNeedsReport reports whether uid's current notices differ from the
+// signature last successfully reported in r.lastNotes. The
+// very first pass over a given UID always reports a change
 // (there is nothing recorded yet to compare against), which is what lets a
 // Note present from a pod's first reconcile onward still reach the user
 // exactly once (AC-4/AC-16) rather than being suppressed as "unchanged".
-// When notes is empty, the key's entry is deleted rather than set to the
-// empty signature, both to bound r.lastNotes to pods currently carrying a
-// Note and so a Note that disappears and later reappears is treated as new
-// again, per this fix's own requirement.
-func (r *Reconciler) podNoteChanged(key string, notes []tier.Note) bool {
-	signature := noteSignature(notes)
+func (r *Reconciler) podNoticeNeedsReport(uid types.UID, signature string) bool {
+	previous, seen := r.lastNotes[uid]
+	return !seen || previous != signature
+}
+
+// recordPodNotice commits a signature only after its reporting path succeeds.
+// Empty signatures are deleted so a notice that disappears and later
+// reappears is reported again, and to bound state under pod churn.
+func (r *Reconciler) recordPodNotice(uid types.UID, signature string) {
 	if r.lastNotes == nil {
-		r.lastNotes = make(map[string]string)
+		r.lastNotes = make(map[types.UID]string)
 	}
-	previous, seen := r.lastNotes[key]
-	changed := !seen || previous != signature
 	if signature == "" {
-		delete(r.lastNotes, key)
+		delete(r.lastNotes, uid)
 	} else {
-		r.lastNotes[key] = signature
+		r.lastNotes[uid] = signature
 	}
-	return changed
 }
 
 // podsInTierKey identifies one cpu_pods_in_tier series: everything the
@@ -352,22 +400,25 @@ type podsInTierKey struct {
 	tier      string
 }
 
-// refreshPodsInTier recomputes metrics.PodsInTier from a full listing of
-// this node's pods in the informer cache (see Reconcile's own Intent
-// comment on why this is a full recompute, not an increment/decrement per
-// event). "In a tier" means tier.Desired's own notion of a tier actually
-// taking effect: IdleRequested for idle (idle has no separate "requested
-// but inactive" case — cpu.idle either is or is not requested), and
-// BurstActive — not merely BurstRequested — for burst, since a burst
-// annotation with no positive CPU limit to act on is reported as
-// TierInactive (AC-4), never actually reaching the burst tier.
+type podTierMembership struct {
+	key   string
+	tiers []podsInTierKey
+}
+
+// refreshPodsInTier initializes or repairs metrics.PodsInTier from a full
+// listing of this node's pods in the informer cache. Production calls it
+// once before incremental reconciliation; tests may call it directly to
+// exercise a full repair. Membership comes from each live cgroup Snapshot,
+// not annotations: cpu.idle must actually be 1, and cpu.max.burst must be
+// positive under a finite cpu.max quota. This keeps the gauge truthful
+// during kubelet lag, rejected writes, and external drift.
 //
 // Intent: every current key is Set before any stale key is deleted, so a
 // concurrent scrape never observes a window where a series that is still
 // current has been wiped but not yet re-written -- the defect a prior
 // Reset-then-Set-loop version of this function had. Only labels present in
-// r.podsInTierLabels (this Reconciler's own previous pass) but absent from
-// this pass's counts are deleted, which is exactly the set of series that
+// r.podsInTierCounts (this Reconciler's previous state) but absent from this
+// pass's counts are deleted, which is exactly the set of series that
 // stopped applying (a pod's tier changed, or it left the cache) -- an
 // unrelated series this Reconciler never wrote is never touched.
 func (r *Reconciler) refreshPodsInTier() error {
@@ -377,60 +428,249 @@ func (r *Reconciler) refreshPodsInTier() error {
 	}
 
 	counts := make(map[podsInTierKey]float64, len(pods))
+	memberships := make(map[types.UID]podTierMembership, len(pods))
+	uidsByKey := make(map[string]types.UID, len(pods))
+	var refreshErrs []error
 	// Intent: collected alongside counts, from the same full listing, so
 	// pruneNoteState below can drop any r.lastNotes entry for a pod that
-	// has left the informer cache entirely -- the leak guard podNoteChanged
+	// has left the informer cache entirely -- the leak guard recordPodNotice
 	// alone cannot provide, since it only ever runs (and so only ever
 	// deletes an entry) for a pod key Reconcile is actually invoked with.
 	// A pod deleted while still carrying a Note-worthy annotation would
 	// otherwise leave its entry in r.lastNotes forever.
-	currentPodKeys := make(map[string]struct{}, len(pods))
+	currentPodUIDs := make(map[types.UID]struct{}, len(pods))
 	for _, pod := range pods {
-		if podKey, err := cache.MetaNamespaceKeyFunc(pod); err == nil {
-			currentPodKeys[podKey] = struct{}{}
+		// Mirror-pod UIDs cannot address their static pods' cgroups. Leaving
+		// them out also makes a full refresh prune any state retained by a
+		// process upgraded from a version that attempted to track them.
+		if isMirrorPod(pod) {
+			continue
 		}
-		desired, _ := tier.Desired(pod)
-		if desired.IdleRequested {
-			counts[podsInTierKey{namespace: pod.Namespace, qosClass: string(desired.QoSClass), tier: "idle"}]++
+		currentPodUIDs[pod.UID] = struct{}{}
+		podKey, keyErr := cache.MetaNamespaceKeyFunc(pod)
+		if keyErr != nil {
+			refreshErrs = append(refreshErrs, fmt.Errorf("pod %s/%s key: %w", pod.Namespace, pod.Name, keyErr))
+			continue
 		}
-		if desired.BurstActive {
-			counts[podsInTierKey{namespace: pod.Namespace, qosClass: string(desired.QoSClass), tier: "burst"}]++
+		uidsByKey[podKey] = pod.UID
+		membership := podTierMembership{key: podKey}
+		qosClass := qos.ClassOf(pod.Spec)
+		dir, pathErr := cgroup.PodCgroupPath(r.cgroupRoot, r.kubepodsName, r.driver, qos.ToCgroupClass(qosClass), string(pod.UID))
+		if pathErr != nil {
+			refreshErrs = append(refreshErrs, fmt.Errorf("pod %s/%s path: %w", pod.Namespace, pod.Name, pathErr))
+			r.preserveLastKnownMembership(pod.UID, &membership, counts)
+			memberships[pod.UID] = membership
+			continue
 		}
+		snapshot, snapshotErr := apply.ReadSnapshot(dir)
+		if snapshotErr != nil {
+			if !errors.Is(snapshotErr, cgroup.ErrCgroupGone) || runningPodNeedsCgroup(pod) {
+				refreshErrs = append(refreshErrs, fmt.Errorf("pod %s/%s snapshot: %w", pod.Namespace, pod.Name, snapshotErr))
+				// A failed read makes the current state unknown. Preserve the
+				// last confirmed membership instead of publishing a false
+				// transition to zero; a later successful reconcile or refresh
+				// will replace it.
+				r.preserveLastKnownMembership(pod.UID, &membership, counts)
+			}
+			memberships[pod.UID] = membership
+			continue
+		}
+		if snapshot.IdleActive {
+			label := podsInTierKey{namespace: pod.Namespace, qosClass: string(qosClass), tier: "idle"}
+			membership.tiers = append(membership.tiers, label)
+			counts[label]++
+		}
+		if snapshot.HasQuota && snapshot.Burst > 0 {
+			label := podsInTierKey{namespace: pod.Namespace, qosClass: string(qosClass), tier: "burst"}
+			membership.tiers = append(membership.tiers, label)
+			counts[label]++
+		}
+		memberships[pod.UID] = membership
 	}
 
 	for key, count := range counts {
 		r.metrics.PodsInTier.WithLabelValues(r.node, key.namespace, key.qosClass, key.tier).Set(count)
 	}
-	for key := range r.podsInTierLabels {
+	for key := range r.podsInTierCounts {
 		if _, stillPresent := counts[key]; !stillPresent {
 			r.metrics.PodsInTier.DeleteLabelValues(r.node, key.namespace, key.qosClass, key.tier)
 		}
 	}
-
-	currentLabels := make(map[podsInTierKey]struct{}, len(counts))
-	for key := range counts {
-		currentLabels[key] = struct{}{}
+	for uid := range r.podMemberships {
+		if _, stillPresent := currentPodUIDs[uid]; !stillPresent {
+			r.forgetApplierPodState(uid)
+		}
 	}
-	r.podsInTierLabels = currentLabels
+	r.podMemberships = memberships
+	r.podUIDByKey = uidsByKey
+	r.podsInTierCounts = counts
+	r.metricsInitialized = true
 
-	r.pruneNoteState(currentPodKeys)
+	r.pruneNoteState(currentPodUIDs)
+	return errors.Join(refreshErrs...)
+}
+
+func (r *Reconciler) preserveLastKnownMembership(uid types.UID, membership *podTierMembership, counts map[podsInTierKey]float64) {
+	previous, ok := r.podMemberships[uid]
+	if !ok {
+		return
+	}
+	membership.tiers = append(membership.tiers, previous.tiers...)
+	for _, label := range previous.tiers {
+		counts[label]++
+	}
+}
+
+func (r *Reconciler) ensureMetricState() {
+	if r.podMemberships == nil {
+		r.podMemberships = make(map[types.UID]podTierMembership)
+	}
+	if r.podUIDByKey == nil {
+		r.podUIDByKey = make(map[string]types.UID)
+	}
+	if r.podsInTierCounts == nil {
+		r.podsInTierCounts = make(map[podsInTierKey]float64)
+	}
+}
+
+func (r *Reconciler) observePodIdentity(key string, uid types.UID) {
+	r.ensureMetricState()
+	if previousUID, ok := r.podUIDByKey[key]; ok && previousUID != uid {
+		r.forgetApplierPodState(previousUID)
+		r.removePod(previousUID)
+		delete(r.lastNotes, previousUID)
+	}
+	r.podUIDByKey[key] = uid
+	if _, ok := r.podMemberships[uid]; !ok {
+		r.podMemberships[uid] = podTierMembership{key: key}
+	}
+}
+
+func (r *Reconciler) setPodActual(key string, pod *corev1.Pod, snapshot apply.Snapshot) {
+	r.observePodIdentity(key, pod.UID)
+	tiers := make([]podsInTierKey, 0, 2)
+	qosClass := string(qos.ClassOf(pod.Spec))
+	if snapshot.IdleActive {
+		tiers = append(tiers, podsInTierKey{namespace: pod.Namespace, qosClass: qosClass, tier: "idle"})
+	}
+	if snapshot.HasQuota && snapshot.Burst > 0 {
+		tiers = append(tiers, podsInTierKey{namespace: pod.Namespace, qosClass: qosClass, tier: "burst"})
+	}
+	r.replacePodMembership(pod.UID, podTierMembership{key: key, tiers: tiers})
+}
+
+func (r *Reconciler) replacePodMembership(uid types.UID, next podTierMembership) {
+	r.ensureMetricState()
+	touched := make(map[podsInTierKey]struct{}, 4)
+	if previous, ok := r.podMemberships[uid]; ok {
+		for _, label := range previous.tiers {
+			r.podsInTierCounts[label]--
+			touched[label] = struct{}{}
+		}
+		if previous.key != next.key {
+			delete(r.podUIDByKey, previous.key)
+		}
+	}
+	for _, label := range next.tiers {
+		r.podsInTierCounts[label]++
+		touched[label] = struct{}{}
+	}
+	r.podMemberships[uid] = next
+	r.podUIDByKey[next.key] = uid
+	r.publishTierCounts(touched)
+}
+
+func (r *Reconciler) removePodByKey(key string) {
+	r.ensureMetricState()
+	uid, ok := r.podUIDByKey[key]
+	if !ok {
+		return
+	}
+	r.forgetApplierPodState(uid)
+	r.removePod(uid)
+	delete(r.podUIDByKey, key)
+	delete(r.lastNotes, uid)
+}
+
+func (r *Reconciler) forgetApplierPodState(uid types.UID) {
+	if forgetter, ok := r.applier.(podStateForgetter); ok {
+		forgetter.ForgetPod(uid)
+	}
+}
+
+func (r *Reconciler) removePod(uid types.UID) {
+	r.ensureMetricState()
+	membership, ok := r.podMemberships[uid]
+	if !ok {
+		return
+	}
+	touched := make(map[podsInTierKey]struct{}, len(membership.tiers))
+	for _, label := range membership.tiers {
+		r.podsInTierCounts[label]--
+		touched[label] = struct{}{}
+	}
+	delete(r.podMemberships, uid)
+	delete(r.podUIDByKey, membership.key)
+	r.publishTierCounts(touched)
+}
+
+func (r *Reconciler) publishTierCounts(touched map[podsInTierKey]struct{}) {
+	for label := range touched {
+		count := r.podsInTierCounts[label]
+		if count <= 0 {
+			delete(r.podsInTierCounts, label)
+			r.metrics.PodsInTier.DeleteLabelValues(r.node, label.namespace, label.qosClass, label.tier)
+			continue
+		}
+		r.metrics.PodsInTier.WithLabelValues(r.node, label.namespace, label.qosClass, label.tier).Set(count)
+	}
+}
+
+func (r *Reconciler) refreshPodActual(key string, pod *corev1.Pod, dir string) error {
+	snapshot, err := apply.ReadSnapshot(dir)
+	if err != nil {
+		if errors.Is(err, cgroup.ErrCgroupGone) {
+			if runningPodNeedsCgroup(pod) {
+				return fmt.Errorf("agent: refresh pod tier metrics: running pod cgroup missing: %w", err)
+			}
+			r.forgetApplierPodState(pod.UID)
+			r.setPodActual(key, pod, apply.Snapshot{})
+			return nil
+		}
+		// Preserve the last confirmed membership for transient failures. A
+		// failed read cannot establish that an active tier disappeared.
+		return fmt.Errorf("agent: refresh pod tier metrics: %w", err)
+	}
+	r.setPodActual(key, pod, snapshot)
 	return nil
 }
 
-// pruneNoteState deletes every r.lastNotes entry whose pod key is absent
-// from currentPodKeys -- the same "recompute from a full listing, then drop
+func runningPodNeedsCgroup(pod *corev1.Pod) bool {
+	return pod != nil && pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp == nil
+}
+
+func isMirrorPod(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	_, ok := pod.Annotations[corev1.MirrorPodAnnotationKey]
+	return ok
+}
+
+// pruneNoteState deletes every r.lastNotes entry whose pod UID is absent
+// from currentPodUIDs -- the same "recompute from a full listing, then drop
 // what no longer applies" shape refreshPodsInTier already uses for
-// r.podsInTierLabels, reused here so a pod's note-tracking entry cannot
-// outlive the pod itself in the informer cache. podNoteChanged's own
+// r.podMemberships, reused here so a pod's note-tracking entry cannot
+// outlive the pod itself in the informer cache. recordPodNotice's own
 // delete-on-empty-notes path is not enough by itself: it only runs for a
-// pod key Reconcile is actually invoked with, so a pod deleted while still
+// pod UID Reconcile is actually invoked with, so a pod deleted while still
 // carrying a Note (the common shape -- an annotation misconfigured for the
 // pod's whole lifetime) would otherwise leave its entry behind forever,
 // growing r.lastNotes without bound on a node with high pod churn.
-func (r *Reconciler) pruneNoteState(currentPodKeys map[string]struct{}) {
-	for key := range r.lastNotes {
-		if _, stillPresent := currentPodKeys[key]; !stillPresent {
-			delete(r.lastNotes, key)
+func (r *Reconciler) pruneNoteState(currentPodUIDs map[types.UID]struct{}) {
+	for uid := range r.lastNotes {
+		if _, stillPresent := currentPodUIDs[uid]; !stillPresent {
+			delete(r.lastNotes, uid)
 		}
 	}
 }

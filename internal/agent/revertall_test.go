@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 
+	"github.com/azalio/cpu-idle-operator/internal/annotations"
 	"github.com/azalio/cpu-idle-operator/internal/apply"
 	"github.com/azalio/cpu-idle-operator/internal/cgroup"
 	"github.com/azalio/cpu-idle-operator/internal/config"
@@ -120,7 +122,7 @@ func TestVC1RevertAllClearsNode(t *testing.T) {
 		assertKnobContent(t, burstDir, apply.KnobCPUMaxBurst, "0")
 		assertKnobContent(t, burstDir, apply.KnobCPUIdle, "0")
 		// burst-only never had cpu.idle active, so Revert never restores a
-		// weight for it (apply/revert.go's revertPlan): it must stay at
+		// weight for it (apply.Applier's buildPlan): it must stay at
 		// whatever seedPodCgroup wrote.
 		assertKnobContent(t, burstDir, apply.KnobCPUWeight, "20")
 
@@ -137,6 +139,64 @@ func TestVC1RevertAllClearsNode(t *testing.T) {
 	})
 }
 
+func TestRevertAllDoesNotClaimAmbiguousWeight(t *testing.T) {
+	root := t.TempDir()
+	const uid = "34343434-3434-3434-3434-343434343434"
+	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "100", "max 100000", "0")
+	pod := revertAllTestPod("ambiguous-weight", uid, "500m")
+	client := fake.NewSimpleClientset(pod)
+
+	cfg := config.Config{NodeName: "node-a", CgroupRoot: root, KubepodsName: cgroup.DefaultKubepodsName}
+	var out bytes.Buffer
+	opts := RevertAllOptions{
+		Client:        client,
+		GateCheck:     fixedReadyGate(cgroup.DriverCgroupfs),
+		EventRecorder: record.NewFakeRecorder(10),
+		Out:           &out,
+	}
+
+	if err := RunRevertAll(context.Background(), cfg, opts); err != nil {
+		t.Fatalf("RunRevertAll() error = %v", err)
+	}
+	assertKnobContent(t, dir, apply.KnobCPUWeight, "100")
+	if !bytes.Contains(out.Bytes(), []byte("none")) {
+		t.Fatalf("output = %q, want ambiguous unowned weight reported as no cleanup", out.String())
+	}
+}
+
+func TestRevertAllRecoversGuardSuppression(t *testing.T) {
+	root := t.TempDir()
+	const uid = "35353535-3535-3535-3535-353535353535"
+	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"0", "20", "10000 100000", "0")
+	pod := revertAllTestPod("guarded", uid, "500m")
+	pod.Spec.Containers[0].Resources.Limits = nil
+	pod.Annotations = map[string]string{
+		annotations.GuardStateKey: `{"version":1,"knob":"cpu.max","restore":"max 100000","suppressed":"10000 100000"}`,
+	}
+	client := fake.NewSimpleClientset(pod)
+
+	cfg := config.Config{NodeName: "node-a", CgroupRoot: root, KubepodsName: cgroup.DefaultKubepodsName}
+	opts := RevertAllOptions{
+		Client:        client,
+		GateCheck:     fixedReadyGate(cgroup.DriverCgroupfs),
+		EventRecorder: record.NewFakeRecorder(10),
+		Out:           &bytes.Buffer{},
+	}
+	if err := RunRevertAll(context.Background(), cfg, opts); err != nil {
+		t.Fatalf("RunRevertAll() error = %v", err)
+	}
+	assertKnobContent(t, dir, apply.KnobCPUMax, "max 100000")
+	current, err := client.CoreV1().Pods(pod.Namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if got := current.Annotations[annotations.GuardStateKey]; got != "" {
+		t.Fatalf("guard marker = %q, want removed", got)
+	}
+}
+
 // revertAllFakeApplier is a call-journaling Applier double for
 // TestVC2PartialFailureNonzeroExit: it lets the test force exactly one
 // pod's Revert call to fail while every other pod's succeeds, without
@@ -149,7 +209,7 @@ type revertAllFakeApplier struct {
 	calls     []types.UID
 }
 
-func (f *revertAllFakeApplier) Apply(context.Context, *corev1.Pod) error {
+func (f *revertAllFakeApplier) Apply(context.Context, *corev1.Pod, bool) error {
 	return nil
 }
 
@@ -213,6 +273,32 @@ func TestVC2PartialFailureNonzeroExit(t *testing.T) {
 			t.Errorf("Applier.Revert was called %d times, want 2: a failing pod must not stop the pass over the rest", got)
 		}
 	})
+}
+
+func TestRevertAllRejectsUnchangedStateAfterReportedSuccess(t *testing.T) {
+	root := t.TempDir()
+	const uid = "56565656-5656-5656-5656-565656565656"
+	seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
+		"1", "1", "max 100000", "0")
+	pod := revertAllTestPod("unchanged", uid, "500m")
+	client := fake.NewSimpleClientset(pod)
+
+	cfg := config.Config{NodeName: "node-a", CgroupRoot: root, KubepodsName: cgroup.DefaultKubepodsName}
+	opts := RevertAllOptions{
+		Client:        client,
+		GateCheck:     fixedReadyGate(cgroup.DriverCgroupfs),
+		EventRecorder: record.NewFakeRecorder(10),
+		Applier:       &revertAllFakeApplier{},
+		Out:           &bytes.Buffer{},
+	}
+
+	err := RunRevertAll(context.Background(), cfg, opts)
+	if err == nil {
+		t.Fatal("RunRevertAll() error = nil, want unchanged live tier rejected")
+	}
+	if !strings.Contains(err.Error(), "1 of 1 pods failed to revert") {
+		t.Fatalf("RunRevertAll() error = %v, want incomplete cleanup count", err)
+	}
 }
 
 // freeAddr binds an ephemeral loopback port, closes it immediately, and

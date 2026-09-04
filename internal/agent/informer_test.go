@@ -1,7 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/util/workqueue"
 )
 
 // TestVC4FieldSelectorScopesToNode covers VC4: the informer's List call
@@ -62,4 +67,66 @@ func TestVC4FieldSelectorScopesToNode(t *testing.T) {
 			t.Errorf("List() FieldSelector = %q, want %q", captured, want)
 		}
 	})
+}
+
+func TestProcessNextItemLogsReconcileFailureBeforeRequeue(t *testing.T) {
+	queue := workqueue.NewTypedRateLimitingQueue[reconcileRequest](workqueue.DefaultTypedControllerRateLimiter[reconcileRequest]())
+	defer queue.ShutDown()
+	var logs bytes.Buffer
+	informer := &Informer{
+		queue:            queue,
+		logger:           slog.New(slog.NewTextHandler(&logs, nil)),
+		failedReconciles: make(map[string]struct{}),
+	}
+	var reconcileHealthy []bool
+	informer.onReconcileHealth = func(healthy bool) {
+		reconcileHealthy = append(reconcileHealthy, healthy)
+	}
+	req := reconcileRequest{key: "prod/web", resync: true}
+	queue.Add(req)
+	wantErr := errors.New("simulated reconciliation failure")
+
+	if keepGoing := informer.processNextItem(context.Background(), func(context.Context, string, bool) error {
+		return wantErr
+	}); !keepGoing {
+		t.Fatal("processNextItem() = false, want queue processing to continue")
+	}
+	if queue.NumRequeues(req) != 1 {
+		t.Fatalf("NumRequeues = %d, want 1", queue.NumRequeues(req))
+	}
+	if len(reconcileHealthy) != 1 || reconcileHealthy[0] {
+		t.Fatalf("reconcile health callbacks = %v, want [false]", reconcileHealthy)
+	}
+	got := logs.String()
+	for _, want := range []string{"reconcile failed", "prod/web", wantErr.Error()} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestProcessNextItemClearsHealthOnlyForRecoveredKey(t *testing.T) {
+	queue := workqueue.NewTypedRateLimitingQueue[reconcileRequest](workqueue.DefaultTypedControllerRateLimiter[reconcileRequest]())
+	defer queue.ShutDown()
+	recovered := reconcileRequest{key: "prod/recovered"}
+	queue.Add(recovered)
+	var gotHealthy []bool
+	informer := &Informer{
+		queue:            queue,
+		logger:           slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		failedReconciles: map[string]struct{}{recovered.key: {}, "prod/still-broken": {}},
+		onReconcileHealth: func(healthy bool) {
+			gotHealthy = append(gotHealthy, healthy)
+		},
+	}
+
+	if keepGoing := informer.processNextItem(context.Background(), func(context.Context, string, bool) error { return nil }); !keepGoing {
+		t.Fatal("processNextItem() = false")
+	}
+	if len(gotHealthy) != 1 || gotHealthy[0] {
+		t.Fatalf("health callbacks = %v, want [false] while another key still fails", gotHealthy)
+	}
+	if _, present := informer.failedReconciles[recovered.key]; present {
+		t.Fatal("recovered key remains in failedReconciles")
+	}
 }
