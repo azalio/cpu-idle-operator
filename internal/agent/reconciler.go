@@ -191,6 +191,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, key string, resync bool) err
 		}
 		return fmt.Errorf("agent: reconcile: get pod %s: %w", key, err)
 	}
+	// The API object for a static pod is a mirror pod with a different UID
+	// from the static pod whose cgroup kubelet created. Kubelet can translate
+	// that UID through its private pod manager, but an API-only node agent
+	// cannot. Computing a path from the mirror UID therefore targets a cgroup
+	// that does not exist. Exclude mirror pods from reconciliation and metrics
+	// instead of permanently retrying an unresolvable path and holding the
+	// whole agent unready.
+	if isMirrorPod(pod) {
+		r.removePodByKey(key)
+		return nil
+	}
 	r.observePodIdentity(key, pod.UID)
 
 	desired, notes := tier.Desired(pod)
@@ -429,6 +440,12 @@ func (r *Reconciler) refreshPodsInTier() error {
 	// otherwise leave its entry in r.lastNotes forever.
 	currentPodUIDs := make(map[types.UID]struct{}, len(pods))
 	for _, pod := range pods {
+		// Mirror-pod UIDs cannot address their static pods' cgroups. Leaving
+		// them out also makes a full refresh prune any state retained by a
+		// process upgraded from a version that attempted to track them.
+		if isMirrorPod(pod) {
+			continue
+		}
 		currentPodUIDs[pod.UID] = struct{}{}
 		podKey, keyErr := cache.MetaNamespaceKeyFunc(pod)
 		if keyErr != nil {
@@ -630,6 +647,14 @@ func (r *Reconciler) refreshPodActual(key string, pod *corev1.Pod, dir string) e
 
 func runningPodNeedsCgroup(pod *corev1.Pod) bool {
 	return pod != nil && pod.Status.Phase == corev1.PodRunning && pod.DeletionTimestamp == nil
+}
+
+func isMirrorPod(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	_, ok := pod.Annotations[corev1.MirrorPodAnnotationKey]
+	return ok
 }
 
 // pruneNoteState deletes every r.lastNotes entry whose pod UID is absent

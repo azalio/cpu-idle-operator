@@ -186,6 +186,61 @@ func TestReconcileRetriesWhenRunningPodCgroupIsMissing(t *testing.T) {
 	}
 }
 
+func TestReconcileSkipsMirrorPodWithoutResolvedStaticUID(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("cccccccc-1111-2222-3333-dddddddddddd", "500m", map[string]string{
+		corev1.MirrorPodAnnotationKey: "static-pod-config-hash",
+		annotations.TierKey:           annotations.TierValueIdle,
+	})
+	pod.Status.Phase = corev1.PodRunning
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	fakeApply := &fakeApplier{}
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), fakeApply, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(prometheus.NewRegistry()), "node-a",
+	)
+
+	if err := reconciler.Reconcile(context.Background(), pod.Namespace+"/"+pod.Name, false); err != nil {
+		t.Fatalf("Reconcile mirror pod error = %v, want nil because its API UID cannot identify the static-pod cgroup", err)
+	}
+	if fakeApply.applyCalls != 0 || fakeApply.revertCalls != 0 {
+		t.Fatalf("applier calls = apply:%d revert:%d, want none for a mirror pod", fakeApply.applyCalls, fakeApply.revertCalls)
+	}
+}
+
+func TestPodsInTierRefreshSkipsMirrorPodWithoutResolvedStaticUID(t *testing.T) {
+	root := t.TempDir()
+	pod := testPod("dddddddd-1111-2222-3333-eeeeeeeeeeee", "500m", map[string]string{
+		corev1.MirrorPodAnnotationKey: "static-pod-config-hash",
+	})
+	pod.Status.Phase = corev1.PodRunning
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(pod); err != nil {
+		t.Fatalf("indexer.Add: %v", err)
+	}
+	registry := prometheus.NewRegistry()
+	reconciler := NewReconciler(
+		corelisters.NewPodLister(indexer), &fakeApplier{}, root,
+		cgroup.DefaultKubepodsName, cgroup.DriverCgroupfs,
+		observe.NewMetrics(registry), "node-a",
+	)
+
+	if err := reconciler.refreshPodsInTier(); err != nil {
+		t.Fatalf("refreshPodsInTier mirror pod error = %v, want nil because mirror pods cannot be sampled by API UID", err)
+	}
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	if got := podsInTierSamples(t, families); len(got) != 0 {
+		t.Fatalf("cpu_pods_in_tier samples = %v, want none for a mirror pod", got)
+	}
+}
+
 func TestReconcileIgnoresMissingCgroupBeforePodIsRunning(t *testing.T) {
 	root := t.TempDir()
 	pod := testPod("bbbbbbbb-1111-2222-3333-cccccccccccc", "500m", map[string]string{
