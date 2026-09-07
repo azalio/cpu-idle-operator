@@ -169,11 +169,14 @@ func TestRevertAllRecoversGuardSuppression(t *testing.T) {
 	root := t.TempDir()
 	const uid = "35353535-3535-3535-3535-353535353535"
 	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBurstable, uid,
-		"0", "20", "10000 100000", "0")
+		"0", "20", "max 100000", "0")
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.freeze"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed frozen cgroup: %v", err)
+	}
 	pod := revertAllTestPod("guarded", uid, "500m")
 	pod.Spec.Containers[0].Resources.Limits = nil
 	pod.Annotations = map[string]string{
-		annotations.GuardStateKey: `{"version":1,"knob":"cpu.max","restore":"max 100000","suppressed":"10000 100000"}`,
+		annotations.GuardStateKey: `{"version":2,"knob":"cgroup.freeze","restore":"0","suppressed":"1"}`,
 	}
 	client := fake.NewSimpleClientset(pod)
 
@@ -188,6 +191,7 @@ func TestRevertAllRecoversGuardSuppression(t *testing.T) {
 		t.Fatalf("RunRevertAll() error = %v", err)
 	}
 	assertKnobContent(t, dir, apply.KnobCPUMax, "max 100000")
+	assertKnobContent(t, dir, "cgroup.freeze", "0")
 	current, err := client.CoreV1().Pods(pod.Namespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get pod: %v", err)

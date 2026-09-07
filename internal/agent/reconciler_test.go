@@ -98,8 +98,9 @@ func testPod(uid, cpuLimit string, annos map[string]string) *corev1.Pod {
 }
 
 // seedPodCgroup creates dir (computed the same way Applier/Reconciler
-// compute it) and writes the four knob files apply.ReadSnapshot reads. It
-// returns dir so a test can assert file content against it directly.
+// compute it) and writes the four knobs apply.ReadSnapshot reads plus
+// cgroup.freeze used by the node guard. It returns dir so a test can assert
+// file content against it directly.
 func seedPodCgroup(t *testing.T, root string, driver cgroup.Driver, qosClass cgroup.QoSClass, uid string, idle, weight, max, burst string) string {
 	t.Helper()
 	dir, err := cgroup.PodCgroupPath(root, cgroup.DefaultKubepodsName, driver, qosClass, uid)
@@ -114,6 +115,7 @@ func seedPodCgroup(t *testing.T, root string, driver cgroup.Driver, qosClass cgr
 		apply.KnobCPUWeight:   weight,
 		apply.KnobCPUMax:      max,
 		apply.KnobCPUMaxBurst: burst,
+		"cgroup.freeze":       "0",
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {

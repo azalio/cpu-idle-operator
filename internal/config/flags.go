@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -26,9 +25,9 @@ const (
 	defaultResyncPeriod = 60 * time.Second
 	defaultMetricsAddr  = ":8080"
 	defaultHealthAddr   = ":8081"
+	defaultGuardHigh    = 0.70
 	defaultGuardLow     = 0.60
 	defaultGuardPeriod  = 5 * time.Second
-	defaultGuardFloor   = "10000 100000"
 	nodeNameEnvVar      = "NODE_NAME"
 )
 
@@ -60,14 +59,12 @@ type Config struct {
 	// HealthAddr is the listen address for the health/readiness endpoint.
 	HealthAddr string
 	// GuardHigh enables the node guard when positive: the non-idle CPU
-	// utilization fraction above which idle-tier pods are suppressed.
+	// utilization fraction above which idle-tier pods are frozen.
 	GuardHigh float64
-	// GuardLow is the fraction below which suppression is lifted.
+	// GuardLow is the fraction below which guard-owned pods are thawed.
 	GuardLow float64
 	// GuardPeriod is the guard's sampling interval.
 	GuardPeriod time.Duration
-	// GuardFloor is the cpu.max value written while suppressed.
-	GuardFloor string
 }
 
 // ParseFlags parses argv (excluding the program name) into a Config,
@@ -85,10 +82,9 @@ func ParseFlags(argv []string) (Config, error) {
 	revertAll := fs.Bool("revert-all", false, "run a one-shot revert of all tiers on this node, then exit")
 	metricsAddr := fs.String("metrics-addr", defaultMetricsAddr, "listen address for the Prometheus metrics endpoint")
 	healthAddr := fs.String("health-addr", defaultHealthAddr, "listen address for the health/readiness endpoint")
-	guardHigh := fs.Float64("guard-high", 0, "node guard: non-idle CPU utilization fraction above which idle-tier pods are suppressed (0 disables the guard)")
-	guardLow := fs.Float64("guard-low", defaultGuardLow, "node guard: fraction below which suppression is lifted")
+	guardHigh := fs.Float64("guard-high", defaultGuardHigh, "node guard: non-idle CPU utilization fraction above which idle-tier pods are frozen (0 disables the guard)")
+	guardLow := fs.Float64("guard-low", defaultGuardLow, "node guard: fraction below which frozen idle-tier pods are thawed")
 	guardPeriod := fs.Duration("guard-period", defaultGuardPeriod, "node guard: sampling interval")
-	guardFloor := fs.String("guard-floor", defaultGuardFloor, "node guard: cpu.max value written to suppressed idle-tier pods")
 
 	if err := fs.Parse(argv); err != nil {
 		return Config{}, err
@@ -122,11 +118,6 @@ func ParseFlags(argv []string) (Config, error) {
 	if *guardPeriod <= 0 {
 		return Config{}, fmt.Errorf("--guard-period must be positive, got %v", *guardPeriod)
 	}
-	normalizedGuardFloor, err := normalizeGuardFloor(*guardFloor)
-	if err != nil {
-		return Config{}, fmt.Errorf("--guard-floor: %w", err)
-	}
-
 	return Config{
 		CgroupRoot:   *cgroupRoot,
 		KubepodsName: *kubepodsName,
@@ -138,22 +129,5 @@ func ParseFlags(argv []string) (Config, error) {
 		GuardHigh:    *guardHigh,
 		GuardLow:     *guardLow,
 		GuardPeriod:  *guardPeriod,
-		GuardFloor:   normalizedGuardFloor,
 	}, nil
-}
-
-func normalizeGuardFloor(value string) (string, error) {
-	fields := strings.Fields(value)
-	if len(fields) != 2 {
-		return "", fmt.Errorf("must be '<quota> <period>' in microseconds, got %q", value)
-	}
-	quota, err := strconv.ParseUint(fields[0], 10, 64)
-	if err != nil || quota < 1000 {
-		return "", fmt.Errorf("quota must be an integer of at least 1000 microseconds, got %q", fields[0])
-	}
-	period, err := strconv.ParseUint(fields[1], 10, 64)
-	if err != nil || period < 1000 || period > 1_000_000 {
-		return "", fmt.Errorf("period must be an integer in [1000, 1000000] microseconds, got %q", fields[1])
-	}
-	return strconv.FormatUint(quota, 10) + " " + strconv.FormatUint(period, 10), nil
 }

@@ -37,6 +37,15 @@ func TestVC3DefaultsAndOverrides(t *testing.T) {
 		if cfg.HealthAddr == "" {
 			t.Errorf("HealthAddr must have a non-empty default")
 		}
+		if cfg.GuardHigh != 0.70 {
+			t.Errorf("GuardHigh = %v, want 0.70 (enabled by default)", cfg.GuardHigh)
+		}
+		if cfg.GuardLow != 0.60 {
+			t.Errorf("GuardLow = %v, want 0.60", cfg.GuardLow)
+		}
+		if cfg.GuardPeriod != 5*time.Second {
+			t.Errorf("GuardPeriod = %v, want 5s", cfg.GuardPeriod)
+		}
 	})
 
 	t.Run("flag overrides win over env and defaults", func(t *testing.T) {
@@ -109,11 +118,8 @@ func TestGuardFlagsRejectUnsafeValues(t *testing.T) {
 		{name: "nan low", args: []string{"--guard-high=0.7", "--guard-low=NaN"}, want: "--guard-low"},
 		{name: "zero period", args: []string{"--guard-high=0.7", "--guard-period=0s"}, want: "--guard-period"},
 		{name: "negative period", args: []string{"--guard-high=0.7", "--guard-period=-1s"}, want: "--guard-period"},
-		{name: "malformed floor", args: []string{"--guard-high=0.7", "--guard-floor=wat"}, want: "--guard-floor"},
-		{name: "unbounded floor", args: []string{"--guard-high=0.7", "--guard-floor=max 100000"}, want: "--guard-floor"},
-		{name: "zero quota", args: []string{"--guard-high=0.7", "--guard-floor=0 100000"}, want: "--guard-floor"},
-		{name: "period below kernel minimum", args: []string{"--guard-high=0.7", "--guard-floor=1000 999"}, want: "--guard-floor"},
-		{name: "removed freeze mode", args: []string{"--guard-freeze=true"}, want: "flag provided but not defined"},
+		{name: "removed floor mode", args: []string{"--guard-floor=10000 100000"}, want: "flag provided but not defined"},
+		{name: "removed freeze selector", args: []string{"--guard-freeze=true"}, want: "flag provided but not defined"},
 	}
 
 	for _, tc := range tests {
@@ -126,14 +132,14 @@ func TestGuardFlagsRejectUnsafeValues(t *testing.T) {
 	}
 }
 
-func TestParseFlagsCanonicalizesGuardFloor(t *testing.T) {
+func TestParseFlagsCanDisableGuardExplicitly(t *testing.T) {
 	t.Setenv("NODE_NAME", "node-a")
-	cfg, err := ParseFlags([]string{"--guard-floor= 010000   100000 "})
+	cfg, err := ParseFlags([]string{"--guard-high=0"})
 	if err != nil {
 		t.Fatalf("ParseFlags() error = %v", err)
 	}
-	if cfg.GuardFloor != "10000 100000" {
-		t.Fatalf("GuardFloor = %q, want canonical cpu.max value", cfg.GuardFloor)
+	if cfg.GuardHigh != 0 {
+		t.Fatalf("GuardHigh = %v, want disabled", cfg.GuardHigh)
 	}
 }
 

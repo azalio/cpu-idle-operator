@@ -207,7 +207,6 @@ func (lc *Lifecycle) Run(ctx context.Context) error {
 				High:         lc.Config.GuardHigh,
 				Low:          lc.Config.GuardLow,
 				Period:       lc.Config.GuardPeriod,
-				FloorQuota:   lc.Config.GuardFloor,
 				CgroupRoot:   lc.Config.CgroupRoot,
 				KubepodsName: lc.Config.KubepodsName,
 				Driver:       gateResult.Driver,

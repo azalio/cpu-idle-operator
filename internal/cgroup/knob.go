@@ -23,7 +23,7 @@ var ErrCgroupGone = errors.New("cgroup: pod cgroup is gone")
 var ErrKnobUnavailable = errors.New("cgroup: required knob is unavailable")
 
 // ErrKnobNotAllowed means a caller requested a file outside the operator's
-// fixed CPU-control surface. Besides documenting ownership, this prevents a
+// fixed cgroup control surface. Besides documenting ownership, this prevents a
 // path-like knob name (for example "../memory.max") from escaping the
 // already-validated pod directory.
 var ErrKnobNotAllowed = errors.New("cgroup: knob is not allowed")
@@ -118,7 +118,7 @@ func WriteKnob(root, kubepodsName, dir, name, value string) error {
 
 func allowedKnob(name string) bool {
 	switch name {
-	case "cpu.idle", "cpu.weight", "cpu.max", "cpu.max.burst":
+	case "cpu.idle", "cpu.weight", "cpu.max", "cpu.max.burst", "cgroup.freeze":
 		return true
 	default:
 		return false

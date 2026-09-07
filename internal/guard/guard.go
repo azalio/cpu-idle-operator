@@ -1,6 +1,6 @@
 // Package guard implements the node guard: a per-node control loop that
-// suppresses idle-tier pods' CPU while the node's non-idle load is above a
-// threshold, and lets them run again once it drops back.
+// freezes idle-tier pod cgroups while the node's non-idle load is above a
+// threshold, and thaws them once it drops back.
 //
 // Why this exists: cpu.idle removes a neighbor from *time-sharing*
 // arbitration, but not from wakeup-placement heuristics (SIS_UTIL's scan
@@ -10,14 +10,14 @@
 // saturated node, an idle-tier stress-ng that was only getting 0.2 cores
 // still tripled the foreground's p99 — while harvesting less than 3% of
 // the node. Past ~70% non-idle utilization there is little left worth
-// harvesting, so this guard temporarily caps the idle tier at a small,
-// explicitly configured cpu.max floor until the pressure passes.
+// harvesting, so this guard freezes idle-tier pod cgroups until the
+// pressure passes.
 //
 // Before changing a cgroup knob, the guard persists an ownership marker and
 // the exact old value on the Pod. That makes cleanup deterministic across
 // annotation removal, eligibility changes, process restarts, and guard
-// configuration changes; it never guesses that a value merely resembling
-// its floor belongs to it.
+// configuration changes; it never guesses that a frozen cgroup belongs to
+// it without the matching marker.
 package guard
 
 import (
@@ -47,16 +47,13 @@ import (
 // Config carries the guard's tunables, parsed from the agent's flags.
 type Config struct {
 	// High is the non-idle utilization fraction (0..1] above which the
-	// guard suppresses idle-tier pods. Zero or negative disables the guard.
+	// guard freezes idle-tier pods. Zero or negative disables the guard.
 	High float64
-	// Low is the fraction below which suppression is lifted. Must be
-	// below High; the gap is the hysteresis band.
+	// Low is the fraction below which guard-owned freezes are thawed. It
+	// must be below High; the gap is the hysteresis band.
 	Low float64
 	// Period is the sampling interval.
-	Period time.Duration
-	// FloorQuota is the cpu.max value written while suppressed, e.g.
-	// "10000 100000" for 10ms of CPU per 100ms period.
-	FloorQuota   string
+	Period       time.Duration
 	CgroupRoot   string
 	KubepodsName string
 	Driver       cgroup.Driver
@@ -66,7 +63,7 @@ type Config struct {
 // Enabled reports whether the parsed configuration turns the guard on.
 func (c Config) Enabled() bool { return c.High > 0 }
 
-// Enabled reports whether this Guard may create new suppressions. Recovery
+// Enabled reports whether this Guard may create new freezes. Recovery
 // remains available regardless of this value.
 func (g *Guard) Enabled() bool { return g.cfg.Enabled() }
 
@@ -179,7 +176,7 @@ func (g *Guard) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	g.logger.Info("node guard started",
 		"high", g.cfg.High, "low", g.cfg.Low,
-		"period", g.cfg.Period.String(), "floor", g.cfg.FloorQuota)
+		"period", g.cfg.Period.String())
 	for {
 		select {
 		case <-ctx.Done():
@@ -190,8 +187,8 @@ func (g *Guard) Run(ctx context.Context) error {
 	}
 }
 
-// tick takes one sample and converges every eligible pod's cpu.max to the
-// value the current temperature calls for.
+// tick takes one sample and converges every eligible pod's cgroup.freeze to
+// the value the current temperature calls for.
 func (g *Guard) tick(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
@@ -294,9 +291,8 @@ func stableUsageDelta(previous, current map[string]uint64) (uint64, bool) {
 // cpu.idle is active, plus their current cpu.stat usage keyed by UID. The
 // live knob check prevents a failed or delayed tier write from making an
 // ordinary workload disappear from non-idle utilization or become a guard
-// suppression target. Actual cpu.max, not the Pod spec, then decides which
-// candidates converge may suppress: kubelet can intentionally leave a spec
-// limit unenforced, or not have applied it yet.
+// freeze target. converge separately checks cgroup.freeze so it never claims
+// an unmarked freeze created by another writer.
 func (g *Guard) idlePodsUsage(pods []*corev1.Pod) ([]*corev1.Pod, map[string]uint64, error) {
 	var candidates []*corev1.Pod
 	usage := make(map[string]uint64)
@@ -336,7 +332,7 @@ func (g *Guard) idlePodsUsage(pods []*corev1.Pod) ([]*corev1.Pod, map[string]uin
 				errs = append(errs, fmt.Errorf("pod %s/%s read cpu.stat: %w (verify cgroup: %v)", pod.Namespace, pod.Name, usageErr, statErr))
 			}
 		}
-		// Never introduce or retain pressure throttling while kubelet is
+		// Never introduce or retain a guard freeze while kubelet is
 		// trying to terminate the workload. Its usage still belongs in the
 		// idle subtraction above until the cgroup disappears, but it is not a
 		// suppression candidate; converge will restore an owned one.

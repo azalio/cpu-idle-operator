@@ -70,6 +70,29 @@ func TestWriteKnobHappyPath(t *testing.T) {
 	}
 }
 
+func TestWriteKnobAllowsCgroupFreezeAtPodLevel(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "kubepods.slice", "kubepods-burstable.slice", "kubepods-burstable-pod550e8400_e29b_41d4_a716_446655440000.slice")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.freeze"), []byte("0"), 0o644); err != nil {
+		t.Fatalf("seed knob file: %v", err)
+	}
+
+	if err := WriteKnob(root, DefaultKubepodsName, dir, "cgroup.freeze", "1"); err != nil {
+		t.Fatalf("WriteKnob returned error: %v", err)
+	}
+
+	got, err := ReadKnob(dir, "cgroup.freeze")
+	if err != nil {
+		t.Fatalf("ReadKnob returned error: %v", err)
+	}
+	if got != "1" {
+		t.Errorf("cgroup.freeze = %q, want %q", got, "1")
+	}
+}
+
 func TestWriteKnobMissingDirReturnsCgroupGone(t *testing.T) {
 	// "kubepods/pod123" is a valid cgroupfs Guaranteed-QoS pod-level path
 	// shape (root/kubepods/pod<uid>), so the guard lets this through and
@@ -192,13 +215,13 @@ func TestWriteKnobRejectsShortWrite(t *testing.T) {
 	}
 }
 
-func TestKnobNameAllowlistRejectsTraversalAndNonCPUFiles(t *testing.T) {
+func TestKnobNameAllowlistRejectsTraversalAndUnownedFiles(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "kubepods", "pod550e8400-e29b-41d4-a716-446655440000")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	for _, name := range []string{"../memory.max", "memory.max", "cgroup.freeze", "cpu.stat"} {
+	for _, name := range []string{"../memory.max", "memory.max", "cpu.stat"} {
 		t.Run(name, func(t *testing.T) {
 			if err := WriteKnob(root, DefaultKubepodsName, dir, name, "1"); !errors.Is(err, ErrKnobNotAllowed) {
 				t.Fatalf("WriteKnob(%q) error = %v, want ErrKnobNotAllowed", name, err)

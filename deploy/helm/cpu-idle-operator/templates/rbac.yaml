@@ -16,9 +16,11 @@ rules:
   # The agent's informer watches every pod cluster-wide and filters to its
   # own node via fieldSelector — the watch itself is still a cluster-scoped
   # verb, so this stays a ClusterRole rather than a per-namespace Role.
+  # patch persists/removes the guard's ownership marker before/after an
+  # exact cgroup.freeze transition, allowing safe recovery after restart.
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "patch", "watch"]
   # create/patch on events is how the agent reports tier changes and
   # rejected writes back onto the pod it acted on (CCR-1).
   - apiGroups: [""]

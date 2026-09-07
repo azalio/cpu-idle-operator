@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -110,9 +111,10 @@ func newGuardHarness(t *testing.T, cpuMax string) *guardHarness {
 		t.Fatalf("mkdir pod cgroup: %v", err)
 	}
 	for name, value := range map[string]string{
-		"cpu.stat": "usage_usec 100\n",
-		"cpu.idle": "1",
-		"cpu.max":  cpuMax,
+		"cpu.stat":      "usage_usec 100\n",
+		"cpu.idle":      "1",
+		"cpu.max":       cpuMax,
+		"cgroup.freeze": "0",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0o644); err != nil {
 			t.Fatalf("seed %s: %v", name, err)
@@ -131,7 +133,6 @@ func newGuardHarness(t *testing.T, cpuMax string) *guardHarness {
 		High:         0.7,
 		Low:          0.6,
 		Period:       time.Hour,
-		FloorQuota:   "10000 100000",
 		CgroupRoot:   root,
 		KubepodsName: cgroup.DefaultKubepodsName,
 		Driver:       cgroup.DriverCgroupfs,
@@ -267,8 +268,8 @@ func TestGuardRestoresSuppressionWhenTierAnnotationIsRemoved(t *testing.T) {
 	if err := h.guard.converge(ctx, true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
 		t.Fatalf("suppress: %v", err)
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-		t.Fatalf("cpu.max = %q, want guard floor", got)
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want frozen", got)
 	}
 	marked := h.apiPod(t)
 	if marked.Annotations[annotations.GuardStateKey] == "" {
@@ -285,8 +286,11 @@ func TestGuardRestoresSuppressionWhenTierAnnotationIsRemoved(t *testing.T) {
 		t.Fatalf("restore ineligible pod: %v", err)
 	}
 
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
+	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want exact restored value", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want removed after restore", got)
@@ -300,33 +304,107 @@ func TestGuardRestoresSuppressionWhenTierAnnotationIsRemoved(t *testing.T) {
 	}
 }
 
-func TestGuardUsesLiveQuotaInsteadOfSpecPrediction(t *testing.T) {
-	t.Run("unbounded cgroup remains eligible despite spec limit", func(t *testing.T) {
+func TestGuardFreezesLimitedIdlePodWithoutChangingCPUMax(t *testing.T) {
+	h := newGuardHarness(t, "50000 100000")
+	ctx := context.Background()
+
+	if err := h.guard.converge(ctx, true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
+		t.Fatalf("hot converge: %v", err)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want frozen", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "50000 100000" {
+		t.Fatalf("cpu.max = %q, want original quota unchanged", got)
+	}
+
+	var state persistedState
+	raw := h.apiPod(t).Annotations[annotations.GuardStateKey]
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		t.Fatalf("decode guard marker %q: %v", raw, err)
+	}
+	if want := (persistedState{Version: 2, Knob: "cgroup.freeze", Restore: "0", Suppressed: "1"}); state != want {
+		t.Fatalf("guard state = %+v, want %+v", state, want)
+	}
+
+	if err := h.guard.converge(ctx, false, []*corev1.Pod{h.pod}, nil); err != nil {
+		t.Fatalf("cool converge: %v", err)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "50000 100000" {
+		t.Fatalf("cpu.max after restore = %q, want original quota unchanged", got)
+	}
+}
+
+func TestGuardDoesNotClaimExternallyFrozenPod(t *testing.T) {
+	h := newGuardHarness(t, "max 100000")
+	if err := os.WriteFile(filepath.Join(h.dir, "cgroup.freeze"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed external freeze: %v", err)
+	}
+
+	if err := h.guard.converge(context.Background(), true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
+		t.Fatalf("hot converge: %v", err)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want external freeze preserved", got)
+	}
+	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
+		t.Fatalf("guard marker = %q, want no ownership claim", got)
+	}
+	if got := metricCount(t, h.registry, "cpu_tier_apply_total"); got != 0 {
+		t.Fatalf("cpu_tier_apply_total = %v, want no claimed cgroup change", got)
+	}
+}
+
+func TestGuardFreezeEligibilityDoesNotDependOnCPUMax(t *testing.T) {
+	t.Run("unbounded cgroup", func(t *testing.T) {
 		h := newGuardHarness(t, "max 100000")
 		h.setInitialCPULimit(t, "500m")
 		if err := h.guard.converge(context.Background(), true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
 			t.Fatalf("converge: %v", err)
 		}
-		if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-			t.Fatalf("cpu.max = %q, want guard floor because live cgroup is unbounded", got)
+		if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+			t.Fatalf("cgroup.freeze = %q, want frozen", got)
+		}
+		if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
+			t.Fatalf("cpu.max = %q, want unchanged", got)
 		}
 	})
 
-	t.Run("finite cgroup is ineligible despite missing spec limit", func(t *testing.T) {
+	t.Run("finite cgroup", func(t *testing.T) {
 		h := newGuardHarness(t, "50000 100000")
 		if err := h.guard.converge(context.Background(), true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
 			t.Fatalf("converge: %v", err)
 		}
 		if got := readGuardKnob(t, h.dir, "cpu.max"); got != "50000 100000" {
-			t.Fatalf("cpu.max = %q, want finite live quota preserved", got)
+			t.Fatalf("cpu.max = %q, want unchanged", got)
 		}
-		if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
-			t.Fatalf("guard marker = %q, want none for an ineligible pod", got)
+		if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+			t.Fatalf("cgroup.freeze = %q, want frozen", got)
+		}
+		if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got == "" {
+			t.Fatal("guard marker was not persisted")
 		}
 	})
 }
 
-func TestGuardKeepsOwnedFloorWhileNodeRemainsHot(t *testing.T) {
+func TestGuardFreezeDoesNotReadCPUMax(t *testing.T) {
+	h := newGuardHarness(t, "max 100000")
+	if err := os.Remove(filepath.Join(h.dir, "cpu.max")); err != nil {
+		t.Fatalf("remove cpu.max: %v", err)
+	}
+
+	if err := h.guard.converge(context.Background(), true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
+		t.Fatalf("hot converge without cpu.max: %v", err)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want frozen without reading cpu.max", got)
+	}
+}
+
+func TestGuardKeepsOwnedFreezeWhileNodeRemainsHot(t *testing.T) {
 	h := newGuardHarness(t, "max 100000")
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
@@ -334,8 +412,8 @@ func TestGuardKeepsOwnedFloorWhileNodeRemainsHot(t *testing.T) {
 			t.Fatalf("converge pass %d: %v", i, err)
 		}
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-		t.Fatalf("cpu.max = %q, want owned guard floor", got)
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want owned freeze", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got == "" {
 		t.Fatal("guard marker was cleared while suppression remained desired")
@@ -352,7 +430,10 @@ func TestGuardRestoresOwnedPodThatLeavesInformerCache(t *testing.T) {
 		t.Fatalf("converge after cache deletion: %v", err)
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want restored after pod left cache", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed after pod left cache", got)
 	}
 	if len(h.guard.owned) != 0 {
 		t.Fatalf("owned entries = %d, want none after cache deletion", len(h.guard.owned))
@@ -381,7 +462,10 @@ func TestGuardRestoresTerminatingPod(t *testing.T) {
 		t.Fatalf("restore terminating pod: %v", err)
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want terminating pod restored", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want terminating pod thawed", got)
 	}
 }
 
@@ -404,6 +488,9 @@ func TestGuardDoesNotAttachOldStateToReplacementPod(t *testing.T) {
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
 		t.Fatalf("old cpu.max = %q, want unchanged without durable ownership", got)
 	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("old cgroup.freeze = %q, want unchanged without durable ownership", got)
+	}
 	current, err := h.client.CoreV1().Pods(replacement.Namespace).Get(ctx, replacement.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get replacement pod: %v", err)
@@ -413,14 +500,14 @@ func TestGuardDoesNotAttachOldStateToReplacementPod(t *testing.T) {
 	}
 }
 
-func TestGuardRecoverRestoresExactValueAcrossRestart(t *testing.T) {
+func TestGuardRecoverThawsOwnedPodAcrossRestart(t *testing.T) {
 	h := newGuardHarness(t, "max 250000")
 	ctx := context.Background()
 	if err := h.guard.converge(ctx, true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
 		t.Fatalf("suppress: %v", err)
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-		t.Fatalf("cpu.max = %q, want guard floor", got)
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want frozen", got)
 	}
 
 	marked := h.apiPod(t)
@@ -430,10 +517,37 @@ func TestGuardRecoverRestoresExactValueAcrossRestart(t *testing.T) {
 		t.Fatalf("Recover: %v", err)
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 250000" {
-		t.Fatalf("cpu.max = %q, want exact pre-guard value", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want removed", got)
+	}
+}
+
+func TestGuardRecoverRestoresLegacyCPUMaxMarker(t *testing.T) {
+	h := newGuardHarness(t, "10000 100000")
+	legacy := h.apiPod(t)
+	legacy.Annotations[annotations.GuardStateKey] = `{"version":1,"knob":"cpu.max","restore":"max 100000","suppressed":"10000 100000"}`
+	updated, err := h.client.CoreV1().Pods(legacy.Namespace).Update(context.Background(), legacy, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatalf("add legacy marker: %v", err)
+	}
+	h.updateIndexer(t, updated)
+
+	if err := h.guard.Recover(context.Background()); err != nil {
+		t.Fatalf("Recover legacy marker: %v", err)
+	}
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
+		t.Fatalf("cpu.max = %q, want legacy throttle restored", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want untouched", got)
+	}
+	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
+		t.Fatalf("legacy guard marker = %q, want removed", got)
 	}
 }
 
@@ -488,7 +602,10 @@ func TestGuardRestoreForgetsLocalOwnershipWhenMarkerChanged(t *testing.T) {
 		t.Fatal("obsolete local ownership retained after marker conflict")
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want trusted local restore", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want trusted local thaw", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != newMarker {
 		t.Fatalf("guard marker = %q, want replacement %q preserved", got, newMarker)
@@ -525,6 +642,9 @@ func TestGuardSuppressionDoesNotOverwriteMarkerMissingFromStaleCache(t *testing.
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
 		t.Fatalf("cpu.max = %q, want no write without acquired ownership", got)
 	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want no write without acquired ownership", got)
+	}
 }
 
 func TestGuardRecoveryRefusesForgedUnboundedRestoreOnLimitedPod(t *testing.T) {
@@ -555,38 +675,33 @@ func TestGuardRecoveryRefusesForgedUnboundedRestoreOnLimitedPod(t *testing.T) {
 	}
 }
 
-func TestGuardDoesNotOverwriteNewKubeletQuotaWhenEligibilityChanges(t *testing.T) {
+func TestGuardThawDoesNotOverwriteNewKubeletQuota(t *testing.T) {
 	h := newGuardHarness(t, "max 100000")
+	h.setInitialCPULimit(t, "500m")
 	ctx := context.Background()
 	if err := h.guard.converge(ctx, true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
 		t.Fatalf("suppress: %v", err)
 	}
 
-	marked := h.apiPod(t)
-	marked.Spec.Containers[0].Resources.Limits = corev1.ResourceList{
-		corev1.ResourceCPU: resource.MustParse("500m"),
-	}
-	updated, err := h.client.CoreV1().Pods(marked.Namespace).Update(ctx, marked, metav1.UpdateOptions{})
-	if err != nil {
-		t.Fatalf("add CPU limit: %v", err)
-	}
-	h.updateIndexer(t, updated)
 	if err := os.WriteFile(filepath.Join(h.dir, "cpu.max"), []byte("50000 100000"), 0o644); err != nil {
 		t.Fatalf("simulate kubelet quota update: %v", err)
 	}
-	if err := h.guard.converge(ctx, true, []*corev1.Pod{updated}, nil); err != nil {
-		t.Fatalf("drop ineligible guard ownership: %v", err)
+	if err := h.guard.converge(ctx, false, []*corev1.Pod{h.pod}, nil); err != nil {
+		t.Fatalf("thaw pod: %v", err)
 	}
 
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "50000 100000" {
 		t.Fatalf("cpu.max = %q, want kubelet's newer quota preserved", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want removed", got)
 	}
 }
 
-func TestGuardRestoresOwnedFloorWhenQuotaEnforcementIsDisabled(t *testing.T) {
+func TestGuardRestoresOwnedFreezeWithCPULimit(t *testing.T) {
 	h := newGuardHarness(t, "max 100000")
 	h.setInitialCPULimit(t, "100m")
 	ctx := context.Background()
@@ -594,23 +709,23 @@ func TestGuardRestoresOwnedFloorWhenQuotaEnforcementIsDisabled(t *testing.T) {
 		t.Fatalf("suppress: %v", err)
 	}
 
-	// The Pod asks for a limit, but a kubelet running with CPU quota
-	// enforcement disabled leaves cpu.max untouched. The bytes still carry
-	// the exact suppression transition owned by the marker, so cleanup must
-	// restore them instead of abandoning a permanent throttle.
+	// Freeze ownership is independent of the Pod's CPU limit.
 	if err := h.guard.converge(ctx, false, []*corev1.Pod{h.pod}, nil); err != nil {
 		t.Fatalf("cool guard: %v", err)
 	}
 
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want exact pre-guard value restored", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want ownership relinquished", got)
 	}
 }
 
-func TestGuardRecoveryUsesOwnedTransitionDespiteStaleInformer(t *testing.T) {
+func TestGuardThawUsesOwnedTransitionDespiteStaleInformer(t *testing.T) {
 	h := newGuardHarness(t, "max 100000")
 	ctx := context.Background()
 	if err := h.guard.converge(ctx, true, []*corev1.Pod{h.pod}, []*corev1.Pod{h.pod}); err != nil {
@@ -618,9 +733,8 @@ func TestGuardRecoveryUsesOwnedTransitionDespiteStaleInformer(t *testing.T) {
 	}
 
 	// Change only the API object. The lister remains deliberately stale and
-	// kubelet never changes cpu.max, as happens when CPU quota enforcement is
-	// disabled. Recovery must be driven by the owned cgroup transition, not
-	// by either copy of the Pod spec.
+	// kubelet changes the Pod spec only. Thaw must be driven by the owned
+	// cgroup transition, not by either copy of the Pod spec.
 	latest := h.apiPod(t)
 	latest.Spec.Containers[0].Resources.Limits = corev1.ResourceList{
 		corev1.ResourceCPU: resource.MustParse("100m"),
@@ -633,7 +747,10 @@ func TestGuardRecoveryUsesOwnedTransitionDespiteStaleInformer(t *testing.T) {
 	}
 
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want exact pre-guard value restored", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want thawed", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want ownership relinquished", got)
@@ -650,8 +767,11 @@ func TestGuardRunDoesNotChangeOwnedStateOnShutdown(t *testing.T) {
 	if err := h.guard.Run(ctx); err != nil {
 		t.Fatalf("Run after cancellation: %v", err)
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-		t.Fatalf("cpu.max after Run returned = %q, want shutdown to preserve state", got)
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
+		t.Fatalf("cpu.max after Run returned = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze after Run returned = %q, want shutdown to preserve frozen state", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got == "" {
 		t.Fatal("guard marker was removed during shutdown")
@@ -671,8 +791,11 @@ func TestGuardDoesNotWriteAfterCancellation(t *testing.T) {
 	if _, err := h.guard.restorePod(canceled, h.pod, state); !errors.Is(err, context.Canceled) {
 		t.Fatalf("restore after cancellation error = %v, want context.Canceled", err)
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
 		t.Fatalf("cpu.max after cancelled restore = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze after cancelled restore = %q, want frozen", got)
 	}
 }
 
@@ -714,7 +837,10 @@ func TestGuardDoesNotChangeTemperatureFromPartialIdleUsageSample(t *testing.T) {
 		t.Fatalf("prevSampled = %v, want baseline reset after partial accounting", h.guard.prevSampled)
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want no suppression from an incomplete sample", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want no freeze from an incomplete sample", got)
 	}
 }
 
@@ -737,7 +863,10 @@ func TestGuardDoesNotChangeTemperatureWhenIdlePodSetChanges(t *testing.T) {
 		t.Fatalf("prevIdle entries = %d, want new one-pod baseline", len(h.guard.prevIdle))
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want no suppression from incomparable samples", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want no freeze from incomparable samples", got)
 	}
 }
 
@@ -764,8 +893,11 @@ func TestGuardDoesNotCoolFromInconsistentCounterDeltas(t *testing.T) {
 	if !h.guard.dec.hot || h.guard.dec.streak != 1 {
 		t.Fatalf("decider = %+v, want prior hot state untouched by contradictory deltas", h.guard.dec)
 	}
-	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "10000 100000" {
-		t.Fatalf("cpu.max = %q, want existing hot state converged", got)
+	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "1" {
+		t.Fatalf("cgroup.freeze = %q, want existing hot state converged", got)
 	}
 }
 
@@ -784,7 +916,10 @@ func TestGuardCoolingTransitionDoesNotSuppressThenImmediatelyRestore(t *testing.
 		t.Fatal("guard remained hot after the second consecutive cool sample")
 	}
 	if got := readGuardKnob(t, h.dir, "cpu.max"); got != "max 100000" {
-		t.Fatalf("cpu.max = %q, want untouched on the cooling transition", got)
+		t.Fatalf("cpu.max = %q, want unchanged", got)
+	}
+	if got := readGuardKnob(t, h.dir, "cgroup.freeze"); got != "0" {
+		t.Fatalf("cgroup.freeze = %q, want untouched on the cooling transition", got)
 	}
 	if got := h.apiPod(t).Annotations[annotations.GuardStateKey]; got != "" {
 		t.Fatalf("guard marker = %q, want no transient ownership", got)
@@ -794,7 +929,7 @@ func TestGuardCoolingTransitionDoesNotSuppressThenImmediatelyRestore(t *testing.
 	}
 }
 
-func TestPersistedStateRejectsNonCanonicalCPUValues(t *testing.T) {
+func TestPersistedLegacyStateRejectsNonCanonicalCPUValues(t *testing.T) {
 	for _, state := range []persistedState{
 		{Version: 1, Knob: "cpu.max", Restore: "max\t100000", Suppressed: "10000 100000"},
 		{Version: 1, Knob: "cpu.max", Restore: "max 100000", Suppressed: "010000 100000"},
@@ -802,6 +937,18 @@ func TestPersistedStateRejectsNonCanonicalCPUValues(t *testing.T) {
 	} {
 		if err := validateState(state); err == nil {
 			t.Fatalf("validateState(%+v) = nil, want non-canonical marker rejected", state)
+		}
+	}
+}
+
+func TestPersistedFreezeStateRejectsAnyTransitionExceptThawedToFrozen(t *testing.T) {
+	for _, state := range []persistedState{
+		{Version: 2, Knob: "cgroup.freeze", Restore: "1", Suppressed: "0"},
+		{Version: 2, Knob: "cgroup.freeze", Restore: "0", Suppressed: "true"},
+		{Version: 2, Knob: "cpu.max", Restore: "0", Suppressed: "1"},
+	} {
+		if err := validateState(state); err == nil {
+			t.Fatalf("validateState(%+v) = nil, want invalid freeze marker rejected", state)
 		}
 	}
 }

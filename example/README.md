@@ -14,9 +14,11 @@ gate at every step:
    progress on whatever CPU is left over.
 
 No pod is restarted, no limit is added, no requests are changed at any
-point. The only thing that changes between act 2 and act 3 is the
-stressor's pod-cgroup `cpu.idle`, flipped by the agent in response to the
-annotation.
+point. The idle-tier experiment itself changes only the stressor's pod-cgroup
+`cpu.idle`, flipped by the agent in response to the annotation. The operator's
+default node-pressure guard may additionally freeze that idle pod while the
+node remains above its configured high threshold; disable the guard explicitly
+for an experiment intended to isolate `cpu.idle` alone.
 
 ## What's in here
 

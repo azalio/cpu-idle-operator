@@ -58,7 +58,6 @@ spec:
             - --guard-high={{ .Values.guard.high }}
             - --guard-low={{ .Values.guard.low }}
             - --guard-period={{ .Values.guard.period }}
-            - {{ printf "--guard-floor=%s" .Values.guard.floor | quote }}
           env:
             # NODE_NAME is mandatory: internal/config.ParseFlags treats an
             # empty node name as a fatal startup error rather than falling
