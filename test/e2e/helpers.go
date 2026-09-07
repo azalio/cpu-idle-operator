@@ -313,6 +313,36 @@ func applyProbePod(t *testing.T, ctx context.Context, clientset *kubernetes.Clie
 	return created
 }
 
+// applyCPULoadPod starts more busy loops than any expected kind node has
+// logical CPUs. It is non-idle work, so the guard's node accounting must see
+// it and cross the default high threshold without relying on host background
+// activity.
+func applyCPULoadPod(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, namespace, name string) *corev1.Pod {
+	t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:    "load",
+				Image:   "busybox:1.36",
+				Command: []string{"sh", "-c", `i=0; while [ "$i" -lt 64 ]; do while :; do :; done & i=$((i+1)); done; wait`},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("32Mi"),
+					},
+				},
+			}},
+		},
+	}
+	created, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("create CPU load pod %s/%s: %v", namespace, name, err)
+	}
+	return created
+}
+
 // isPodReady reports whether pod's PodReady condition is True.
 func isPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {

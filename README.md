@@ -1,13 +1,14 @@
 # cpu-idle-operator
 
-`cpu-idle-operator` is a Kubernetes node agent that exposes two cgroup v2
-CPU controls through pod annotations: `cpu.idle` and `cpu.max.burst`.
-It runs as a DaemonSet and requires no CRDs, admission webhook, or
-control-plane component.
+`cpu-idle-operator` is a Kubernetes node agent that exposes `cpu.idle` and
+`cpu.max.burst` through pod annotations. Its default-enabled node-pressure
+guard additionally controls `cgroup.freeze` for eligible idle-tier pods. It
+runs as a DaemonSet and requires no CRDs, admission webhook, or control-plane
+component.
 
 ## Maximum, Yield, and Progress
 
-The two controls act on different scheduler properties:
+The controls act on different scheduler properties:
 
 - **Maximum** is the CPU ceiling. Kubernetes derives `cpu.max` from
   `limits.cpu`; burst lets a pod spend unused allowance from earlier
@@ -15,6 +16,8 @@ The two controls act on different scheduler properties:
 - **Yield** is whether a pod competes normally or steps aside for other
   runnable work. The idle tier changes this property with `cpu.idle`.
 - **Progress** is the CPU time the workload actually receives.
+- **Pause** is whether the workload can run at all. The node-pressure guard
+  temporarily sets `cgroup.freeze=1` when foreground utilization stays high.
 
 The idle tier gives CPU away; the burst tier spends only the pod's own
 banked quota. Neither annotation grants a pod CPU taken from a neighbour,
@@ -55,7 +58,10 @@ kubectl -n cpu-idle-system rollout status daemonset/cpu-idle-agent
 
 The chart creates the `cpu-idle-system` namespace. See
 [`values.yaml`](deploy/helm/cpu-idle-operator/values.yaml) for image,
-resource, scheduling, cgroup path, metrics, and health endpoint settings.
+resource, scheduling, cgroup path, metrics, health endpoint, and node-pressure
+guard settings. The guard and its required Pod-patch RBAC are included and
+enabled by the default chart install; no separate `guard-values.yaml` is
+needed.
 
 Do not remove the chart while annotated pods still have active cgroup state:
 process shutdown intentionally does not revert annotation-owned tiers. First
@@ -136,46 +142,74 @@ cgroup writes are reported as Kubernetes Events on the affected pod.
 
 ## Node-pressure guard
 
-The optional guard temporarily throttles eligible idle-tier pods when
-non-idle node utilization crosses a high threshold and restores them after
-it falls below a lower threshold for two samples. It is disabled by default:
+The guard protects foreground work when there is too little spare node CPU
+left to harvest safely. It is enabled by default with the following values:
 
 ```yaml
 guard:
-  high: 0
+  high: 0.70
   low: 0.60
   period: 5s
-  floor: "10000 100000"
 ```
 
-Set `guard.high` to a fraction greater than zero to enable it. The guard:
+`high` and `low` are fractions of the node's aggregate CPU capacity used by
+non-idle work. For example, `high: 0.70` means 70% across all logical CPUs,
+not 70% of one CPU. Every `period`, the agent samples node CPU usage and
+subtracts the CPU used by active idle-tier pods:
 
-- considers only running, non-terminating pods that request the idle tier and
-  whose live `cpu.idle` is actually `1`;
-- reads the live pod `cpu.max` and suppresses only an actually unbounded
-  cgroup, regardless of what the Pod spec predicts;
-- writes only `cpu.max`; it never freezes the workload;
-- persists an internal ownership marker before suppression and records the
-  exact previous value;
+1. Two consecutive samples above `high` make the node hot. The guard writes
+   `cgroup.freeze=1` to each eligible idle-tier pod cgroup.
+2. The node stays hot throughout the hysteresis band between `low` and
+   `high`.
+3. Two consecutive samples below `low` make the node cool. The guard writes
+   `cgroup.freeze=0` only to pod cgroups it previously froze.
+
+With the default 5-second period, a hot/cool transition needs roughly 10
+seconds of sustained load on the corresponding side of the threshold. A new
+eligible pod discovered while the node is already hot is frozen on the next
+sample.
+
+An eligible pod must be Running, not terminating, carry
+`cpu.azalio.net/tier=idle`, and already have live `cpu.idle=1`. CPU requests,
+CPU limits, and the current `cpu.max` value do not affect freeze eligibility;
+the guard never reads or writes `cpu.max` as part of normal operation.
+
+`cgroup.freeze=1` pauses every process in the pod; this is a stop, not a CPU
+limit or a small CPU allowance. Application traffic and health probes cannot
+be served until the guard thaws the pod. Liveness probes may therefore restart
+guarded workloads during a sustained hot interval; configure probes and use
+this feature only for workloads that may be paused.
+
+To tune the thresholds without an extra values file:
+
+```sh
+helm upgrade --install cpu-idle-operator ./deploy/helm/cpu-idle-operator \
+  --set guard.high=0.80 \
+  --set guard.low=0.65 \
+  --set guard.period=10s
+```
+
+Keep `0 < low < high <= 1`. Set `guard.high=0` to disable new guard activity.
+Before disabling it, run the `--revert-all` pass from the uninstall procedure
+so no currently frozen pod is left behind.
+
+For safe recovery, the guard:
+
+- persists an internal ownership marker before freezing and records the exact
+  `cgroup.freeze` transition;
 - restores only while the live value still equals its own suppression value,
-  preserving a different value written later by kubelet or another actor;
+  preserving a different value written later by another actor;
 - recovers owned state at the next startup while the guard remains enabled,
-  and in explicit `--revert-all` mode. A restart-time marker that asks to
-  remove a CPU quota from a Pod whose current spec expects one is treated as
-  untrusted: recovery fails closed, keeps the finite live value and retains
-  the marker for investigation.
+  and in explicit `--revert-all` mode;
+- recognizes old `cpu.max` ownership markers only to undo suppression left by
+  versions that implemented the guard as throttling. New markers and normal
+  guard writes use only `cgroup.freeze`.
 
 Normal process shutdown performs no cgroup writes. This keeps rolling updates
 from changing workload policy; a surviving marker is recovered by the next
-enabled agent. Before setting `guard.high` back to `0`, run the same
-`--revert-all` pass documented in the uninstall procedure. A disabled guard
-intentionally ignores Pod markers and does not mutate tenant-controlled
-metadata.
-
-Enabling the guard requires `patch` on Pods for that marker. Keep the guard
-disabled unless the installed ClusterRole grants it. Kubernetes RBAC cannot
-limit that verb to one annotation, so this is a material permission expansion;
-the chart does not grant it by default.
+enabled agent. The chart's ClusterRole includes Pod `patch` for the ownership
+marker. Kubernetes RBAC cannot restrict that verb to one annotation, so this
+permission is part of the documented security boundary.
 
 The ownership annotation is operator-internal state. Workloads must not set or
 modify it themselves.
@@ -212,8 +246,10 @@ The container runs as uid 0 with all Linux capabilities dropped and without
 the practical ability to modify any Pod cgroup on its node. The meaningful
 boundary is therefore enforced in code:
 
-- cgroup writes are restricted to an exact pod-cgroup path and the four files
-  `cpu.idle`, `cpu.weight`, `cpu.max`, and `cpu.max.burst`;
+- normal cgroup writes are restricted to an exact pod-cgroup path and
+  `cpu.idle`, `cpu.weight`, `cpu.max.burst`, or `cgroup.freeze`; `cpu.max` is
+  allowlisted only to remove a legacy version-1 guard throttle during recovery,
+  never for current guard control;
 - no QoS slice, root cgroup, container scope, CRI socket, container runtime, or
   `/proc/<pid>/cgroup` path is used;
 - the Pod informer is server-side scoped to the local node;

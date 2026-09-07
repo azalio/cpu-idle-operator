@@ -21,7 +21,10 @@ import (
 	"github.com/azalio/cpu-idle-operator/internal/qos"
 )
 
-const guardStateVersion = 1
+const (
+	legacyGuardStateVersion = 1
+	guardStateVersion       = 2
+)
 
 var errOwnershipMarkerChanged = errors.New("guard: ownership marker changed")
 
@@ -87,10 +90,9 @@ func (g *Guard) Recover(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// converge restores marked pods that are no longer desired, then suppresses
-// candidates whose live pod cgroup is actually unbounded when hot. allPods
-// and candidates stay separate so losing an annotation or gaining a live CPU
-// quota cannot make an owned pod vanish from the cleanup set.
+// converge restores marked pods that are no longer desired, then freezes
+// eligible candidates while hot. allPods and candidates stay separate so
+// losing an annotation cannot make an owned pod vanish from the cleanup set.
 func (g *Guard) converge(ctx context.Context, hot bool, allPods, candidates []*corev1.Pod) error {
 	candidateUIDs := make(map[string]struct{}, len(candidates))
 	for _, pod := range candidates {
@@ -116,7 +118,7 @@ func (g *Guard) converge(ctx context.Context, hot bool, allPods, candidates []*c
 		isEligible := false
 		if hot && isCandidate && (!marked || state.Knob == g.suppressionKnob()) {
 			var eligibilityErr error
-			isEligible, eligibilityErr = g.actualQuotaAllowsSuppression(pod, state, marked)
+			isEligible, eligibilityErr = g.actualFreezeAllowsSuppression(pod, state, marked)
 			if eligibilityErr != nil && !marked && !errors.Is(eligibilityErr, cgroup.ErrCgroupGone) {
 				errs = append(errs, eligibilityErr)
 			}
@@ -178,10 +180,9 @@ func (g *Guard) suppressPod(ctx context.Context, pod *corev1.Pod) error {
 		return err
 	}
 	if !marked {
-		if !isUnboundedCPUMax(current) {
-			// Eligibility is determined from the actual pod cgroup. A Pod
-			// spec can lag kubelet or quota enforcement can be disabled;
-			// neither case permits overwriting a finite live quota.
+		if current != "0" {
+			// An unmarked frozen cgroup belongs to another writer. Never claim
+			// it and later thaw work that this guard did not freeze.
 			return nil
 		}
 		if current == desired {
@@ -203,7 +204,7 @@ func (g *Guard) suppressPod(ctx context.Context, pod *corev1.Pod) error {
 		}
 		g.owned[string(pod.UID)] = ownedState{pod: pod.DeepCopy(), state: state, trusted: true}
 	} else if state.Knob != knob || (current != state.Restore && current != state.Suppressed) {
-		// A newer writer changed cpu.max after the marker was created.
+		// A newer writer changed cgroup.freeze after the marker was created.
 		// converge will relinquish ownership; never overwrite that value
 		// from this defensive inner layer either.
 		return nil
@@ -224,26 +225,25 @@ func (g *Guard) suppressPod(ctx context.Context, pod *corev1.Pod) error {
 	return nil
 }
 
-// actualQuotaAllowsSuppression reports whether pod's live cpu.max is
-// unbounded. For a marked pod, the current floor still counts as eligible
-// only while it exactly matches this guard's recorded transition; any third
-// value belongs to kubelet or another writer and makes the pod ineligible.
-func (g *Guard) actualQuotaAllowsSuppression(pod *corev1.Pod, state persistedState, marked bool) (bool, error) {
+// actualFreezeAllowsSuppression reports whether the live cgroup is thawed or
+// already carries this guard's owned freeze transition. An unmarked frozen
+// cgroup belongs to another writer and is never claimed.
+func (g *Guard) actualFreezeAllowsSuppression(pod *corev1.Pod, state persistedState, marked bool) (bool, error) {
 	dir, err := g.podDir(pod)
 	if err != nil {
 		return false, err
 	}
-	current, err := cgroup.ReadKnob(dir, "cpu.max")
+	current, err := cgroup.ReadKnob(dir, "cgroup.freeze")
 	if err != nil {
 		return false, err
 	}
-	if !validCPUMax(current, true) {
-		return false, fmt.Errorf("guard: invalid live cpu.max %q on %s/%s", current, pod.Namespace, pod.Name)
+	if current != "0" && current != "1" {
+		return false, fmt.Errorf("guard: invalid live cgroup.freeze %q on %s/%s", current, pod.Namespace, pod.Name)
 	}
 	if !marked {
-		return isUnboundedCPUMax(current), nil
+		return current == "0", nil
 	}
-	if state.Knob != "cpu.max" || !isUnboundedCPUMax(state.Restore) {
+	if state.Knob != "cgroup.freeze" {
 		return false, nil
 	}
 	return current == state.Restore || current == state.Suppressed, nil
@@ -279,21 +279,21 @@ func (g *Guard) restorePod(ctx context.Context, pod *corev1.Pod, state persisted
 
 	changed := false
 	if current == state.Suppressed {
-		if !g.mayRestoreUnbounded(pod, state) {
+		if state.Version == legacyGuardStateVersion && !g.mayRestoreUnbounded(pod, state) {
 			// Pod annotations are tenant-controlled metadata, not a trusted
 			// ownership database. A forged or stale marker must never turn a
 			// kubelet-limited Pod's finite cpu.max into "max" after restart.
 			// Keep the marker and fail recovery visibly: clearing it would
-			// silently strand the floor and destroy the evidence needed for
-			// an operator to resolve the ambiguous state.
+			// silently strand the legacy throttle and destroy the evidence
+			// needed for an operator to resolve the ambiguous state.
 			return false, fmt.Errorf("guard: refuse untrusted restore of %s/%s %s from %q to unbounded %q: pod spec expects a CPU quota",
 				pod.Namespace, pod.Name, state.Knob, current, state.Restore)
 		}
 		// A transition made by this process is trusted even if the Pod spec
 		// later gains a limit: kubelet may have quota enforcement disabled or
 		// not have applied a resize yet, and abandoning ownership would strand
-		// the guard floor. Across restart, only a Pod that still expects no
-		// kubelet quota may restore an unbounded value.
+		// the legacy guard throttle. Across restart, only a Pod that still
+		// expects no kubelet quota may restore an unbounded value.
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -363,29 +363,25 @@ func (g *Guard) stateForPod(pod *corev1.Pod) (persistedState, bool, error) {
 }
 
 func validateState(state persistedState) error {
-	if state.Version != guardStateVersion {
+	switch state.Version {
+	case guardStateVersion:
+		if state.Knob != "cgroup.freeze" || state.Restore != "0" || state.Suppressed != "1" {
+			return fmt.Errorf("invalid cgroup.freeze transition %q -> %q", state.Restore, state.Suppressed)
+		}
+	case legacyGuardStateVersion:
+		if state.Knob != "cpu.max" {
+			return fmt.Errorf("unsupported legacy knob %q", state.Knob)
+		}
+		restore, restoreOK := canonicalCPUMax(state.Restore, true)
+		suppressed, suppressedOK := canonicalCPUMax(state.Suppressed, false)
+		if !restoreOK || !strings.HasPrefix(restore, "max ") || restore != state.Restore ||
+			!suppressedOK || suppressed != state.Suppressed {
+			return fmt.Errorf("invalid legacy cpu.max transition %q -> %q", state.Restore, state.Suppressed)
+		}
+	default:
 		return fmt.Errorf("unsupported marker version %d", state.Version)
 	}
-	if state.Knob != "cpu.max" {
-		return fmt.Errorf("unsupported knob %q", state.Knob)
-	}
-	restore, restoreOK := canonicalCPUMax(state.Restore, true)
-	suppressed, suppressedOK := canonicalCPUMax(state.Suppressed, false)
-	if !restoreOK || !strings.HasPrefix(restore, "max ") || restore != state.Restore ||
-		!suppressedOK || suppressed != state.Suppressed {
-		return fmt.Errorf("invalid cpu.max transition %q -> %q", state.Restore, state.Suppressed)
-	}
 	return nil
-}
-
-func isUnboundedCPUMax(value string) bool {
-	canonical, ok := canonicalCPUMax(value, true)
-	return ok && canonical == value && strings.HasPrefix(canonical, "max ")
-}
-
-func validCPUMax(value string, allowMax bool) bool {
-	canonical, ok := canonicalCPUMax(value, allowMax)
-	return ok && canonical == value
 }
 
 func canonicalCPUMax(value string, allowMax bool) (string, bool) {
@@ -505,11 +501,11 @@ func (g *Guard) patchMarker(ctx context.Context, pod *corev1.Pod, value string, 
 }
 
 func (g *Guard) suppressionKnob() string {
-	return "cpu.max"
+	return "cgroup.freeze"
 }
 
 func (g *Guard) suppressedValue() string {
-	return g.cfg.FloorQuota
+	return "1"
 }
 
 func (g *Guard) podDir(pod *corev1.Pod) (string, error) {

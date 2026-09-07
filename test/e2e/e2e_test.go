@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +40,9 @@ import (
 // apply the idle tier, read cpu.idle=1 and the kernel's idle minimum weight
 // from the node, introduce out-of-band drift without changing the Pod, wait
 // for the informer's periodic resync to repair it, remove the annotation,
-// and read cpu.idle=0 with the restored weight back from the node.
+// and read cpu.idle=0 with the restored weight back from the node. It then
+// saturates the node with non-idle work and proves the default guard's real
+// cgroup.freeze 0 -> 1 -> 0 transition without any cpu.max change.
 func TestKindApplyAndRevert(t *testing.T) {
 	clientset := kubeClient(t)
 	requireNodeReachable(t)
@@ -72,6 +75,7 @@ func TestKindApplyAndRevert(t *testing.T) {
 	}
 
 	runPositiveTierScenario(t, ctx, clientset, agentPath, idlePod)
+	runGuardFreezeScenario(t, ctx, clientset, ns)
 }
 
 // runPositiveTierScenario exercises AC-10 for real: apply the idle tier
@@ -109,6 +113,60 @@ func runPositiveTierScenario(t *testing.T, ctx context.Context, clientset *kuber
 	t.Logf("cpu.idle=0 and cpu.weight=%s confirmed at %s after removing the tier annotation", wantWeight, agentPath)
 }
 
+// runGuardFreezeScenario proves the default node-pressure guard against a
+// real cgroup v2 filesystem. A non-idle load pod saturates the node, the
+// agent freezes an eligible idle-tier pod without changing its cpu.max, and
+// deleting the load lets the guard thaw only its owned transition.
+func runGuardFreezeScenario(t *testing.T, ctx context.Context, clientset *kubernetes.Clientset, namespace string) {
+	t.Helper()
+
+	idlePod := applyProbePod(t, ctx, clientset, namespace, "guard-idle-probe", "100m", map[string]string{
+		annotations.TierKey: annotations.TierValueIdle,
+	})
+	idlePod = waitForPod(t, ctx, clientset, namespace, idlePod.Name, podReadyTimeout, isPodReady)
+	idlePath := computeAgentPath(t, kindCgroupRoot, kindKubepodsName, qos.ToCgroupClass(qos.ClassOf(idlePod.Spec)), string(idlePod.UID))
+	waitForNodeFileValue(t, idlePath, apply.KnobCPUIdle, "1", podReadyTimeout)
+	waitForNodeFileValue(t, idlePath, "cgroup.freeze", "0", podReadyTimeout)
+	waitForNodeFileField(t, idlePath, "cgroup.events", "frozen", "0", podReadyTimeout)
+	cpuMaxBefore, err := readNodeFile(idlePath + "/" + apply.KnobCPUMax)
+	if err != nil {
+		t.Fatalf("read cpu.max before guard freeze: %v", err)
+	}
+
+	loadPod := applyCPULoadPod(t, ctx, clientset, namespace, "guard-foreground-load")
+	waitForPod(t, ctx, clientset, namespace, loadPod.Name, podReadyTimeout, isPodReady)
+	waitForNodeFileValue(t, idlePath, "cgroup.freeze", "1", podReadyTimeout)
+	waitForNodeFileField(t, idlePath, "cgroup.events", "frozen", "1", podReadyTimeout)
+
+	marked := waitForPod(t, ctx, clientset, namespace, idlePod.Name, podReadyTimeout, func(pod *corev1.Pod) bool {
+		return strings.Contains(pod.Annotations[annotations.GuardStateKey], `"knob":"cgroup.freeze"`)
+	})
+	if marker := marked.Annotations[annotations.GuardStateKey]; marker != `{"version":2,"knob":"cgroup.freeze","restore":"0","suppressed":"1"}` {
+		t.Fatalf("guard ownership marker = %q, want version-2 cgroup.freeze transition", marker)
+	}
+	if cpuMaxAfter, readErr := readNodeFile(idlePath + "/" + apply.KnobCPUMax); readErr != nil {
+		t.Fatalf("read cpu.max after guard freeze: %v", readErr)
+	} else if cpuMaxAfter != cpuMaxBefore {
+		t.Fatalf("cpu.max changed across guard freeze: before=%q after=%q", cpuMaxBefore, cpuMaxAfter)
+	}
+
+	zero := int64(0)
+	if err := clientset.CoreV1().Pods(namespace).Delete(ctx, loadPod.Name, metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil {
+		t.Fatalf("delete foreground load pod: %v", err)
+	}
+	waitForNodeFileValue(t, idlePath, "cgroup.freeze", "0", podReadyTimeout)
+	waitForNodeFileField(t, idlePath, "cgroup.events", "frozen", "0", podReadyTimeout)
+	waitForPod(t, ctx, clientset, namespace, idlePod.Name, podReadyTimeout, func(pod *corev1.Pod) bool {
+		return pod.Annotations[annotations.GuardStateKey] == ""
+	})
+	if cpuMaxAfter, readErr := readNodeFile(idlePath + "/" + apply.KnobCPUMax); readErr != nil {
+		t.Fatalf("read cpu.max after guard thaw: %v", readErr)
+	} else if cpuMaxAfter != cpuMaxBefore {
+		t.Fatalf("cpu.max changed across guard thaw: before=%q after=%q", cpuMaxBefore, cpuMaxAfter)
+	}
+	t.Logf("default guard fully froze and thawed %s/%s (cgroup.events frozen 0 -> 1 -> 0) without changing cpu.max=%s", namespace, idlePod.Name, cpuMaxBefore)
+}
+
 // removeTierAnnotation clears annotations.TierKey from namespace/name via a
 // JSON merge patch (a null value deletes the key), the same mechanism a
 // real client removing the annotation would use.
@@ -136,6 +194,29 @@ func waitForNodeFileValue(t *testing.T, path, knob, want string, timeout time.Du
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("timed out waiting for %s/%s == %q; last read: %q (err: %v)", path, knob, want, last, lastErr)
+}
+
+// waitForNodeFileField polls a cgroup flat-keyed file until key has want.
+// cgroup.freeze is a request bit; cgroup.events' frozen field is the kernel's
+// completion signal after every process in the cgroup subtree has stopped.
+func waitForNodeFileField(t *testing.T, path, file, key, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last string
+	var lastErr error
+	for time.Now().Before(deadline) {
+		last, lastErr = readNodeFile(path + "/" + file)
+		if lastErr == nil {
+			fields := strings.Fields(last)
+			for i := 0; i+1 < len(fields); i += 2 {
+				if fields[i] == key && fields[i+1] == want {
+					return
+				}
+			}
+		}
+		time.Sleep(pollInterval)
+	}
+	t.Fatalf("timed out waiting for %s/%s field %s == %q; last read: %q (err: %v)", path, file, key, want, last, lastErr)
 }
 
 // waitForNodeIdleWeight accepts both representations seen on real cgroup v2

@@ -169,8 +169,9 @@ jobs:
       # come up and, patched only with kind's own --cgroup-root/
       # --kubepods-name (never config/base's own defaults, which stay
       # correct for a real production kubelet), actually apply the idle tier,
-      # repair out-of-band drift on resync, and revert it for real (AC-10) --
-      # see e2e_test.go's own doc comment.
+      # repair out-of-band drift on resync, revert it for real (AC-10), and
+      # drive the default node guard through a real cgroup.freeze 0 -> 1 -> 0
+      # transition without changing cpu.max -- see e2e_test.go's doc comment.
       - name: Run kind e2e scenario
         run: go test -tags e2e -v -run '^TestKindApplyAndRevert$' ./test/e2e/...
 

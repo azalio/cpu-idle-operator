@@ -225,7 +225,6 @@ func recoverGuardState(ctx context.Context, cfg config.Config, driver cgroup.Dri
 		High:         cfg.GuardHigh,
 		Low:          cfg.GuardLow,
 		Period:       cfg.GuardPeriod,
-		FloorQuota:   cfg.GuardFloor,
 		CgroupRoot:   cfg.CgroupRoot,
 		KubepodsName: cfg.KubepodsName,
 		Driver:       driver,

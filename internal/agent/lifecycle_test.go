@@ -203,10 +203,13 @@ func TestLifecycleDoesNotProcessGuardMarkersWhenGuardIsDisabled(t *testing.T) {
 	root := t.TempDir()
 	const uid = "56565656-5656-5656-5656-565656565656"
 	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, uid,
-		"0", "20", "10000 100000", "0")
+		"0", "20", "max 100000", "0")
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.freeze"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed frozen cgroup: %v", err)
+	}
 	pod := testPod(uid, "500m", map[string]string{
 		annotations.TierKey:       annotations.TierValueIdle,
-		annotations.GuardStateKey: `{"version":1,"knob":"cpu.max","restore":"max 100000","suppressed":"10000 100000"}`,
+		annotations.GuardStateKey: `{"version":2,"knob":"cgroup.freeze","restore":"0","suppressed":"1"}`,
 	})
 	pod.Spec.Containers[0].Resources.Limits = nil
 	client := fake.NewSimpleClientset(pod)
@@ -234,9 +237,9 @@ func TestLifecycleDoesNotProcessGuardMarkersWhenGuardIsDisabled(t *testing.T) {
 	go func() { runErr <- lc.Run(ctx) }()
 	// Waiting for ordinary tier convergence proves startup passed cache sync
 	// and entered the reconciler. The disabled guard must still leave both
-	// its live cpu.max state and tenant-controlled marker untouched.
+	// its live cgroup.freeze state and tenant-controlled marker untouched.
 	waitForKnobContent(t, dir, apply.KnobCPUIdle, "1", 5*time.Second)
-	waitForKnobContent(t, dir, apply.KnobCPUMax, "10000 100000", time.Second)
+	waitForKnobContent(t, dir, "cgroup.freeze", "1", time.Second)
 	current, err := client.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get pod: %v", err)
@@ -255,9 +258,12 @@ func TestLifecycleRecoversGuardStateWhenEnabled(t *testing.T) {
 	root := t.TempDir()
 	const uid = "57575757-5757-5757-5757-575757575757"
 	dir := seedPodCgroup(t, root, cgroup.DriverCgroupfs, cgroup.QoSBestEffort, uid,
-		"0", "20", "10000 100000", "0")
+		"0", "20", "max 100000", "0")
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.freeze"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed frozen cgroup: %v", err)
+	}
 	pod := testPod(uid, "500m", map[string]string{
-		annotations.GuardStateKey: `{"version":1,"knob":"cpu.max","restore":"max 100000","suppressed":"10000 100000"}`,
+		annotations.GuardStateKey: `{"version":2,"knob":"cgroup.freeze","restore":"0","suppressed":"1"}`,
 	})
 	pod.Spec.Containers[0].Resources.Limits = nil
 	client := fake.NewSimpleClientset(pod)
@@ -275,7 +281,6 @@ func TestLifecycleRecoversGuardStateWhenEnabled(t *testing.T) {
 			GuardHigh:    0.70,
 			GuardLow:     0.60,
 			GuardPeriod:  time.Hour,
-			GuardFloor:   "10000 100000",
 		},
 		EventRecorder:   record.NewFakeRecorder(20),
 		GateCheck:       fixedReadyGate(cgroup.DriverCgroupfs),
@@ -286,7 +291,7 @@ func TestLifecycleRecoversGuardStateWhenEnabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
 	go func() { runErr <- lc.Run(ctx) }()
-	waitForKnobContent(t, dir, apply.KnobCPUMax, "max 100000", 5*time.Second)
+	waitForKnobContent(t, dir, "cgroup.freeze", "0", 5*time.Second)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {

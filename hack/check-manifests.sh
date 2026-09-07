@@ -13,7 +13,11 @@
 #   mounted with readOnly: false.
 #
 #   test_vc2_rbac_is_minimal (VC2): the ClusterRole grants exactly
-#   get/list/watch on pods and create/patch on events -- nothing more.
+#   get/list/patch/watch on pods and create/patch on events -- nothing more.
+#
+#   test_vc3_guard_defaults_to_freeze: the installed DaemonSet enables the
+#   freeze guard at 70%/60% with a 5s sample period and carries no retired
+#   cpu.max floor flag.
 #
 # Requires: kustomize, yq (mikefarah/yq, v4 expression syntax).
 
@@ -108,7 +112,7 @@ test_vc2_rbac_is_minimal() {
 
   [[ -n "${pods_api_groups}" ]] || fail "VC2: no ClusterRole rule found for resource 'pods' alone"
   [[ "${pods_api_groups}" == '[""]' ]] || fail "VC2: pods rule apiGroups is not exactly [\"\"] (got '${pods_api_groups}')"
-  [[ "${pods_verbs}" == '["get","list","watch"]' ]] || fail "VC2: pods rule verbs are not exactly [get,list,watch] (got '${pods_verbs}')"
+  [[ "${pods_verbs}" == '["get","list","patch","watch"]' ]] || fail "VC2: pods rule verbs are not exactly [get,list,patch,watch] (got '${pods_verbs}')"
 
   [[ -n "${events_api_groups}" ]] || fail "VC2: no ClusterRole rule found for resource 'events' alone"
   [[ "${events_api_groups}" == '[""]' ]] || fail "VC2: events rule apiGroups is not exactly [\"\"] (got '${events_api_groups}')"
@@ -121,8 +125,19 @@ test_vc2_rbac_is_minimal() {
   fi
 }
 
+test_vc3_guard_defaults_to_freeze() {
+  local args
+  args=$(yq eval-all -o=json -I=0 'select(.kind == "DaemonSet") | .spec.template.spec.containers[0].args' "${rendered_file}")
+
+  [[ "${args}" == *'"--guard-high=0.7"'* ]] || fail "VC3: default DaemonSet does not enable guard at high=0.7 (args '${args}')"
+  [[ "${args}" == *'"--guard-low=0.6"'* ]] || fail "VC3: default DaemonSet does not set guard low=0.6 (args '${args}')"
+  [[ "${args}" == *'"--guard-period=5s"'* ]] || fail "VC3: default DaemonSet does not set guard period=5s (args '${args}')"
+  [[ "${args}" != *'--guard-floor='* ]] || fail "VC3: default DaemonSet still carries retired cpu.max guard-floor (args '${args}')"
+}
+
 test_vc1_no_privileged_no_sysadmin
 test_vc2_rbac_is_minimal
+test_vc3_guard_defaults_to_freeze
 
 if [[ "${failures}" -gt 0 ]]; then
   echo "check-manifests: ${failures} check(s) failed" >&2

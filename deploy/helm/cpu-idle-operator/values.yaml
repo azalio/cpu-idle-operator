@@ -38,15 +38,26 @@ kubepodsName: kubepods
 metricsAddr: ":8080"
 healthAddr: ":8081"
 
-# Optional node-pressure guard. A high threshold of 0 disables it. When
-# enabled, the agent temporarily caps live, unbounded idle-tier pod cgroups
-# at floor after two consecutive samples above high, and restores only state
-# it owns after two consecutive samples below low.
+# Node-pressure guard. Enabled by default.
+#
+# high: fraction of total node CPU used by non-idle work. After two
+# consecutive samples above this value, the guard writes cgroup.freeze=1 for
+# Running, non-terminating pods whose cpu.azalio.net/tier=idle request is
+# already active as cpu.idle=1. Set high to 0 to disable the guard.
+#
+# low: hysteresis threshold. While the node is hot, two consecutive samples
+# below this value thaw guard-owned pods with cgroup.freeze=0. Keep low below
+# high whenever the guard is enabled.
+#
+# period: interval between samples. With the defaults, freeze and thaw each
+# require roughly 10 seconds beyond the threshold (two 5-second samples).
+#
+# Freezing pauses every process in the pod; application traffic and health
+# probes cannot complete until it is thawed. The guard never changes cpu.max.
 guard:
-  high: 0
+  high: 0.70
   low: 0.60
   period: 5s
-  floor: "10000 100000"
 
 nodeSelector: {}
 tolerations: []
